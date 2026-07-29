@@ -16,5 +16,22 @@ data/*.pdf
 # Vector DB
 chroma_db/
 
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.c9/
+
 # macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# Environment files
+.python-version
+.env
+.env.local
