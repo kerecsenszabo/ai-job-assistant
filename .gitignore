@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Project data (keep CV private)
+data/cv.pdf
+data/*.pdf
+
+# Vector DB
+chroma_db/
+
+# macOS
+.DS_Store
