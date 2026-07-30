@@ -16,6 +16,8 @@ from pathlib import Path
 from assistant.cv_parser import load_cv_chunks
 from assistant.vector_store import ingest, clear_db
 
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+
 
 def ingest_cv() -> int:
     """Load and ingest CV from data/cv.pdf."""
@@ -33,7 +35,7 @@ def ingest_cv() -> int:
 def ingest_cover_letters() -> int:
     """Load and ingest cover letters from data/cover_letters/."""
     print("\n📝 Ingesting cover letters...")
-    cover_letters_dir = Path("data/cover_letters")
+    cover_letters_dir = DATA_DIR / "cover_letters"
     if not cover_letters_dir.exists():
         print("✗ No cover_letters directory found")
         return 0
@@ -58,7 +60,7 @@ def ingest_cover_letters() -> int:
 def ingest_messages() -> int:
     """Load and ingest LinkedIn messages from data/messages/."""
     print("\n💬 Ingesting messages...")
-    messages_dir = Path("data/messages")
+    messages_dir = DATA_DIR / "messages"
     if not messages_dir.exists():
         print("✗ No messages directory found")
         return 0
@@ -83,7 +85,7 @@ def ingest_messages() -> int:
 def ingest_job_descriptions() -> int:
     """Load and ingest job descriptions from data/job_descriptions/."""
     print("\n🎯 Ingesting job descriptions...")
-    jd_dir = Path("data/job_descriptions")
+    jd_dir = DATA_DIR / "job_descriptions"
     if not jd_dir.exists():
         print("✗ No job_descriptions directory found")
         return 0
