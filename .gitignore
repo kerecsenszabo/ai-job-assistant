@@ -12,6 +12,9 @@ wheels/
 # Project data (keep CV private)
 data/cv.pdf
 data/*.pdf
+data/cover_letters/
+data/messages/
+data/job_descriptions/
 
 # Vector DB
 chroma_db/
