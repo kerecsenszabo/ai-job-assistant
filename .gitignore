@@ -14,7 +14,7 @@ data/*.pdf
 data/*.json
 data/cover_letters/
 data/messages/
-data/job_descriptions/*
+data/job_descriptions/*.txt
 
 # Vector DB
 chroma_db/

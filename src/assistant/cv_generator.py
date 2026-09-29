@@ -235,9 +235,13 @@ def write_pdf(latex: str, output: Path) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Tailor a JSON CV and export it as PDF.")
+    parser = argparse.ArgumentParser(
+        description="Tailor a JSON CV and export it as PDF."
+    )
     parser.add_argument("--cv", type=Path, required=True, help="Source CV JSON file")
-    parser.add_argument("--job", type=Path, required=True, help="Job description text file")
+    parser.add_argument(
+        "--job", type=Path, required=True, help="Job description text file"
+    )
     parser.add_argument("--output", type=Path, required=True, help="Output PDF path")
     parser.add_argument("--model", default=MODEL, help="Ollama model name")
     args = parser.parse_args()

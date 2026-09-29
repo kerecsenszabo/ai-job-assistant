@@ -5,9 +5,11 @@ from assistant.embeddings import embed
 DB_PATH = Path(__file__).parent.parent.parent / "chroma_db"
 COLLECTION_NAME = "career_docs"
 
+
 def get_collection():
     client = chromadb.PersistentClient(path=str(DB_PATH))
     return client.get_or_create_collection(COLLECTION_NAME)
+
 
 def ingest(chunks: list[str], source: str = "cv") -> None:
     """Embed and store chunks in ChromaDB."""
@@ -22,6 +24,7 @@ def ingest(chunks: list[str], source: str = "cv") -> None:
     )
     print(f"Ingested {len(chunks)} chunks from '{source}'")
 
+
 def search(query: str, top_k: int = 5, source_filter: str | None = None) -> list[str]:
     """Semantic search — returns top_k relevant chunks."""
     collection = get_collection()
@@ -33,6 +36,7 @@ def search(query: str, top_k: int = 5, source_filter: str | None = None) -> list
         where=where,
     )
     return results["documents"][0]
+
 
 def clear_db() -> None:
     """Clear all documents from the ChromaDB collection."""

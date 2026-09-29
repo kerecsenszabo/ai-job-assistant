@@ -10,18 +10,20 @@ console = Console()
 
 
 def main() -> None:
-    console.print(Panel.fit(
-        "[bold cyan]AI Job Assistant[/bold cyan] — CV Chat (Phase 2 - RAG)\n"
-        "Type [yellow]exit[/yellow] or [yellow]quit[/yellow] to stop.",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel.fit(
+            "[bold cyan]AI Job Assistant[/bold cyan] — CV Chat (Phase 2 - RAG)\n"
+            "Type [yellow]exit[/yellow] or [yellow]quit[/yellow] to stop.",
+            border_style="cyan",
+        )
+    )
 
     console.print("[dim]✓ RAG pipeline ready (retrieves relevant CV chunks)[/dim]\n")
 
     while True:
         try:
             question = Prompt.ask("\n[bold green]You[/bold green]")
-        except (KeyboardInterrupt, EOFError):
+        except KeyboardInterrupt, EOFError:
             break
 
         if question.strip().lower() in {"exit", "quit", "q"}:
