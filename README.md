@@ -61,6 +61,31 @@ python3 --version    # should show 3.12+
 | **FastAPI** | Web framework | Backend for the final production app |
 | **Gradio** | ML UI framework | Quick UI for testing features as you build |
 
+### Tailoring a CV for a job
+
+Keep your source CV in the small, portable JSON format shown in
+[`data/cv.example.json`](data/cv.example.json). Copy it to `data/cv.json` and
+replace the example content. Then save a job description as a text file and
+run:
+
+```bash
+uv run python -m assistant.cv_generator \
+  --cv data/cv.json \
+  --job data/job_descriptions/target.txt \
+  --output output/target-cv.pdf
+```
+
+The local Ollama model only reorders and rewrites evidence already present in
+the source CV. The tailored JSON is saved beside the PDF. PDF creation uses
+`pdflatex` when available, or Tectonic as a user-level alternative:
+
+```bash
+brew install tectonic
+```
+
+MacTeX also works if an administrator can install it:
+`brew install --cask mactex`.
+
 ---
 
 ## Project Structure
