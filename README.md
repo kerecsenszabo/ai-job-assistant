@@ -85,23 +85,66 @@ uv run python -m assistant.cv_generator \
 ```
 
 Both commands use the local Ollama model (`--model` overrides the default
-`llama3.1:8b`). Without `--job`, it only polishes the experience prose —
-including repeated client names in consecutive bullets — and keeps every bullet
-and every other section as written. With `--job`, the model ranks your existing
-skills, AI-native items and experience bullets by relevance (it never writes
-bullet text, so it cannot invent responsibilities), then writes a tailored
-summary from the selected evidence. A summary naming anything absent from your
-source CV is retried, then replaced by your original summary. Contact details,
-education, publications and certifications are always copied from the source.
-An optional `"ai_native": ["..."]` list in the source JSON provides a separate
-AI-Native Practice section for cross-role AI tooling and projects. The
-generated JSON and `.tex` are saved beside the PDF, and the `output/` directory
-is gitignored so tailored CVs stay private. PDF creation uses `pdflatex` when
-available, or Tectonic as a user-level alternative:
+`granite4.2:8b`). The JSON CV is the authoritative source of candidate facts;
+the job description only determines what to emphasize. All processing stays local.
 
-Ollama receives a Pydantic-generated JSON schema for each operation, so its
-selection, summary and polishing responses are constrained to the structures
-the generator validates.
+With `--job`, generation follows an evidence-first pipeline:
+
+1. Parse atomic job requirements with source quotes, distinguishing required,
+   preferred, responsibilities, and explicit eligibility constraints.
+2. Match requirements against the **complete original CV**, with stable evidence
+   IDs and explanations. Independently review these matches as direct, partial,
+   not evidenced, or unclear. Missing evidence does not mean you lack the skill.
+3. Calculate deterministic **CV-evidenced job match** and must-have coverage.
+   Required and eligibility items have weight 3; preferred items and
+   responsibilities have weight 1. Direct matches earn full credit, partial
+   matches half, and unsupported/unclear matches zero. No assessable requirements
+   means insufficient information, not a 0% match. Unresolved eligibility
+   constraints are reported separately. This is not a hiring probability.
+4. Select relevant skills and bullets without forced minimum counts (maximum
+   10 skills, 3 AI-native items, and 4 bullets per role). Preserve role chronology
+   and client context; keep one original contextual bullet for unmatched roles.
+5. Propose rewritten bullets and a summary, each linked to source evidence.
+   An independent claim-level review checks factual support and qualifiers,
+   including ownership, scale, metrics, technologies, and prototype versus
+   production work. Mechanical checks reject new numbers, unsupported named
+   terms, and changed client prefixes. A global skill never authorizes adding
+   that technology to a particular role.
+
+Supported rewrites export automatically. Rejected, uncertain, or malformed
+rewrite/review responses retain original wording and produce visible warnings.
+If any proposed summary sentence fails, the whole original summary is retained.
+Service/transport errors still propagate; they are not disguised as successful
+generation. Model-based evidence review reduces risk but **cannot guarantee
+perfect factual accuracy**; inspect the audit before submitting an application.
+Rewriting never changes the match score, which comes only from original evidence.
+
+Without `--job`, the same rewrite safeguards polish every experience bullet
+without filtering content or rewriting the summary. Contact details, employer
+names, roles, dates, education, publications and certifications are copied from
+the source in both modes.
+
+An optional `"ai_native": ["..."]` list in the source JSON provides a separate
+AI-Native Practice section for cross-role AI tooling and projects. The generated
+JSON and `.tex` are saved beside the PDF. A separate `target-cv.report.json`
+contains the scoring rubric, parsed requirements, full source evidence,
+requirement matches, selected/contextual evidence IDs, unresolved eligibility
+constraints, and every proposed/exported rewrite with its verdict and reason.
+Malformed rewrite/review responses are also retained for troubleshooting.
+The match percentage and gaps are **not included in the application CV**.
+All these files contain personal data; keep them in the gitignored `output/`
+directory. PDF import is not part of this pipeline yet: `cv_parser.py` extracts
+text, but imported facts must first be confirmed and placed in the source JSON.
+
+To customize scoring, pass `--rubric path/to/rubric.json`, containing any
+overrides such as `{"required_weight": 4, "partial_credit": 0.25}`.
+All weights must be positive; partial credit must be between 0 and 1.
+
+PDF creation uses `pdflatex` when available, or Tectonic as a user-level alternative:
+
+Ollama receives a Pydantic-generated JSON schema for each operation. Schema,
+source-quote, evidence-ID, target-coverage, and review-coverage validation prevent
+malformed responses from authorizing claims.
 
 ```bash
 brew install tectonic
@@ -127,7 +170,7 @@ uv run python -m assistant.model_benchmark models
 # Start with a representative small/balanced/advanced subset
 uv run python -m assistant.model_benchmark run \
   --cv data/cv.json \
-  --jobs data/job_descriptions/aldi_mle.txt data/job_descriptions/xr.txt \
+  --jobs data/job_descriptions/aldi.txt data/job_descriptions/xr.txt \
   --models qwen3:4b gemma3:4b llama3.1:8b qwen3:14b \
   --repeat 2 \
   --pull
@@ -138,11 +181,15 @@ uv run python -m assistant.model_benchmark report
 
 Each case records success or failure, selection and summary latency, retries,
 summary fallback, selected item count, coarse job-keyword recall, the exact
-Ollama model digest, and the full JSON output. The report also shows cross-job
-diversity, where higher values mean the model selected more distinct evidence
-for different jobs. Keyword recall and diversity are comparison aids, not
-correctness scores; review close candidates manually for relevance and writing
-quality. Public benchmarks useful for choosing candidates include
+Ollama model digest, and the full JSON output. Evidence-first runs also record
+match and must-have coverage, accepted/rejected/unclear rewrite counts, and the
+complete evidence audit in `report_json`; older records keep these fields null.
+The report also shows cross-job diversity of exported items. Wording changes can
+increase diversity without changing evidence selection. Keyword overlap and
+diversity are comparison aids, not correctness scores. Match coverage measures
+source support for the job, not model quality, and accepted rewrite counts are
+automated judgments, not proof of factual fidelity. Review close candidates
+manually for relevance and writing quality. Public benchmarks useful for choosing candidates include
 [LiveBench](https://livebench.ai/) for broad current capability,
 [IFEval](https://arxiv.org/abs/2311.07911) for instruction following,
 [JSONSchemaBench](https://github.com/guidance-ai/jsonschemabench) for structured
