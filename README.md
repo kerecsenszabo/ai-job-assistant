@@ -110,6 +110,46 @@ brew install tectonic
 MacTeX also works if an administrator can install it:
 `brew install --cask mactex`.
 
+### Benchmarking local models
+
+The benchmark runner compares Ollama models on the actual CV-tailoring workload
+and stores every result in SQLite. The curated 10-model ladder covers Qwen,
+Llama, Gemma and Mistral from 1.7B through 14B, plus `gpt-oss:20b` as the
+largest practical candidate for a 24 GiB Mac. Hidden reasoning is disabled for
+all models so structured JSON is read from the same output channel and latency
+remains comparable.
+
+```bash
+# See the 10-model suite and which models are already installed
+uv run python -m assistant.model_benchmark models
+
+# Start with a representative small/balanced/advanced subset
+uv run python -m assistant.model_benchmark run \
+  --cv data/cv.json \
+  --jobs data/job_descriptions/aldi_mle.txt data/job_descriptions/xr.txt \
+  --models qwen3:4b gemma3:4b llama3.1:8b qwen3:14b \
+  --repeat 2 \
+  --pull
+
+# Reprint the latest stored report
+uv run python -m assistant.model_benchmark report
+```
+
+Each case records success or failure, selection and summary latency, retries,
+summary fallback, selected item count, coarse job-keyword recall, the exact
+Ollama model digest, and the full JSON output. The report also shows cross-job
+diversity, where higher values mean the model selected more distinct evidence
+for different jobs. Keyword recall and diversity are comparison aids, not
+correctness scores; review close candidates manually for relevance and writing
+quality. Public benchmarks useful for choosing candidates include
+[LiveBench](https://livebench.ai/) for broad current capability,
+[IFEval](https://arxiv.org/abs/2311.07911) for instruction following,
+[JSONSchemaBench](https://github.com/guidance-ai/jsonschemabench) for structured
+output, [FACTS Grounding](https://arxiv.org/abs/2501.03200) for grounded
+generation, and [LiveCodeBench](https://livecodebench.github.io/) for coding.
+They are screening signals only; local workload quality, latency, retries, and
+memory use determine the best model for this application.
+
 ---
 
 ## Project Structure

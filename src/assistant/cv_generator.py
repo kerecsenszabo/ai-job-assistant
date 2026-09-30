@@ -8,6 +8,8 @@ import re
 import shutil
 import subprocess
 import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -29,9 +31,24 @@ MAX_BULLETS = 4
 SUMMARY_ATTEMPTS = 2
 
 
+@dataclass
+class TailorDiagnostics:
+    """Operational measurements from one tailoring run."""
+
+    selection_seconds: float = 0.0
+    summary_seconds: float = 0.0
+    summary_attempts: int = 0
+    summary_fallback: bool = False
+
+
 def local_llm(model: str) -> OllamaLLM:
     """Local LLM with room for a full CV round-trip."""
-    return OllamaLLM(model=model, temperature=0, num_ctx=CONTEXT_TOKENS)
+    return OllamaLLM(
+        model=model,
+        reasoning=False,
+        temperature=0,
+        num_ctx=CONTEXT_TOKENS,
+    )
 
 
 def structured_llm(llm: Runnable, schema: type[BaseModel]) -> Runnable:
@@ -269,6 +286,7 @@ def tailor_cv(
     *,
     model: str = MODEL,
     llm: Any | None = None,
+    diagnostics: TailorDiagnostics | None = None,
 ) -> CV:
     """Use the local LLM to tailor *cv* to *job_description*.
 
@@ -294,11 +312,14 @@ def tailor_cv(
             for item in cv.experience
         ],
     }
+    selection_started = time.perf_counter()
     response = (
         SELECT_PROMPT | structured_llm(llm, TailorSelection) | StrOutputParser()
     ).invoke(
         {"job_description": job_description, "items_json": json.dumps(items, indent=2)}
     )
+    if diagnostics is not None:
+        diagnostics.selection_seconds = time.perf_counter() - selection_started
     try:
         selection = TailorSelection.model_validate_json(response)
     except (json.JSONDecodeError, ValueError) as exc:
@@ -340,6 +361,9 @@ def tailor_cv(
     source_text = cv.model_dump_json()
     feedback = ""
     for _ in range(SUMMARY_ATTEMPTS):
+        if diagnostics is not None:
+            diagnostics.summary_attempts += 1
+        summary_started = time.perf_counter()
         response = (
             SUMMARY_PROMPT | structured_llm(llm, TailoredSummary) | StrOutputParser()
         ).invoke(
@@ -349,6 +373,8 @@ def tailor_cv(
                 "feedback": feedback,
             }
         )
+        if diagnostics is not None:
+            diagnostics.summary_seconds += time.perf_counter() - summary_started
         try:
             summary = TailoredSummary.model_validate_json(response).summary
         except (json.JSONDecodeError, ValueError):
@@ -366,6 +392,8 @@ def tailor_cv(
         "supported by the CV.",
         file=sys.stderr,
     )
+    if diagnostics is not None:
+        diagnostics.summary_fallback = True
     return tailored
 
 

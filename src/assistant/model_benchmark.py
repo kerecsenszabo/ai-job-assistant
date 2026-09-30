@@ -1,0 +1,416 @@
+"""Benchmark local Ollama models on the CV-tailoring workload."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sqlite3
+import subprocess
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+
+from assistant.cv_generator import CV, TailorDiagnostics, load_cv, tailor_cv
+
+DEFAULT_DATABASE = Path("output/model-benchmarks.sqlite")
+MODEL_SUITE = (
+    ("qwen3:1.7b", "1.4 GB", "basic"),
+    ("llama3.2:3b", "2.0 GB", "basic"),
+    ("qwen3:4b", "2.5 GB", "small"),
+    ("gemma3:4b", "3.3 GB", "small"),
+    ("mistral:7b", "4.1 GB", "balanced"),
+    ("llama3.1:8b", "4.9 GB", "balanced"),
+    ("qwen3:8b", "5.2 GB", "balanced"),
+    ("gemma3:12b", "8.1 GB", "advanced"),
+    ("qwen3:14b", "9.3 GB", "advanced"),
+    ("gpt-oss:20b", "14 GB", "advanced"),
+)
+WORD = re.compile(r"[a-z][a-z0-9+#.-]{2,}")
+STOPWORDS = {
+    "and",
+    "are",
+    "for",
+    "from",
+    "have",
+    "into",
+    "our",
+    "that",
+    "the",
+    "their",
+    "this",
+    "using",
+    "with",
+    "your",
+}
+
+
+@dataclass(frozen=True)
+class BenchmarkResult:
+    run_id: str
+    model: str
+    job: str
+    repetition: int
+    status: str
+    total_seconds: float
+    diagnostics: TailorDiagnostics
+    keyword_recall: float | None = None
+    selected_items: int | None = None
+    output_json: str | None = None
+    error: str | None = None
+
+
+def connect(path: Path) -> sqlite3.Connection:
+    """Open the benchmark database and ensure its schema exists."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS benchmark_runs (
+            run_id TEXT PRIMARY KEY,
+            started_at TEXT NOT NULL,
+            ollama_version TEXT NOT NULL,
+            cv_path TEXT NOT NULL,
+            context_tokens INTEGER NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS benchmark_results (
+            run_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            job TEXT NOT NULL,
+            repetition INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            total_seconds REAL NOT NULL,
+            selection_seconds REAL NOT NULL,
+            summary_seconds REAL NOT NULL,
+            summary_attempts INTEGER NOT NULL,
+            summary_fallback INTEGER NOT NULL,
+            keyword_recall REAL,
+            selected_items INTEGER,
+            output_json TEXT,
+            error TEXT,
+            PRIMARY KEY (run_id, model, job, repetition),
+            FOREIGN KEY (run_id) REFERENCES benchmark_runs(run_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS benchmark_models (
+            run_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            size TEXT NOT NULL,
+            PRIMARY KEY (run_id, model),
+            FOREIGN KEY (run_id) REFERENCES benchmark_runs(run_id)
+        )
+        """
+    )
+    return connection
+
+
+def command_output(*command: str) -> str:
+    """Run a small local command and return its output."""
+    completed = subprocess.run(
+        command, check=True, capture_output=True, text=True
+    )
+    return completed.stdout.strip() or completed.stderr.strip()
+
+
+def installed_model_info() -> dict[str, tuple[str, str]]:
+    """Return installed Ollama model names with their digest and size."""
+    lines = command_output("ollama", "list").splitlines()[1:]
+    info = {}
+    for line in lines:
+        columns = line.split()
+        if len(columns) >= 4:
+            info[columns[0]] = (columns[1], f"{columns[2]} {columns[3]}")
+    return info
+
+
+def pull_model(model: str) -> None:
+    """Install one model through Ollama."""
+    subprocess.run(["ollama", "pull", model], check=True)
+
+
+def keywords(text: str) -> set[str]:
+    """Extract coarse technical and domain terms for an automatic recall proxy."""
+    return {word for word in WORD.findall(text.casefold()) if word not in STOPWORDS}
+
+
+def selected_text(cv: CV) -> str:
+    """Text whose relevance was controlled by the tailoring model."""
+    parts = [cv.summary, *cv.skills, *cv.ai_native]
+    parts.extend(bullet for role in cv.experience for bullet in role.bullets)
+    return " ".join(parts)
+
+
+def keyword_recall(job_description: str, cv: CV) -> float:
+    """Fraction of job terms represented in selected CV evidence."""
+    required = keywords(job_description)
+    return len(required & keywords(selected_text(cv))) / len(required) if required else 0.0
+
+
+def selected_item_count(cv: CV) -> int:
+    """Count model-selected list items in a tailored CV."""
+    return (
+        len(cv.skills)
+        + len(cv.ai_native)
+        + sum(len(role.bullets) for role in cv.experience)
+    )
+
+
+def save_result(connection: sqlite3.Connection, result: BenchmarkResult) -> None:
+    """Persist one completed or failed model/job evaluation."""
+    connection.execute(
+        """
+        INSERT INTO benchmark_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            result.run_id,
+            result.model,
+            result.job,
+            result.repetition,
+            result.status,
+            result.total_seconds,
+            result.diagnostics.selection_seconds,
+            result.diagnostics.summary_seconds,
+            result.diagnostics.summary_attempts,
+            result.diagnostics.summary_fallback,
+            result.keyword_recall,
+            result.selected_items,
+            result.output_json,
+            result.error,
+        ),
+    )
+    connection.commit()
+
+
+def benchmark_one(
+    run_id: str,
+    model: str,
+    job_path: Path,
+    repetition: int,
+    cv: CV,
+) -> BenchmarkResult:
+    """Run one model against one job and collect workload-specific metrics."""
+    job_description = job_path.read_text(encoding="utf-8")
+    diagnostics = TailorDiagnostics()
+    started = time.perf_counter()
+    try:
+        tailored = tailor_cv(
+            cv,
+            job_description,
+            model=model,
+            diagnostics=diagnostics,
+        )
+    except Exception as exc:
+        return BenchmarkResult(
+            run_id=run_id,
+            model=model,
+            job=job_path.name,
+            repetition=repetition,
+            status="error",
+            total_seconds=time.perf_counter() - started,
+            diagnostics=diagnostics,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+    return BenchmarkResult(
+        run_id=run_id,
+        model=model,
+        job=job_path.name,
+        repetition=repetition,
+        status="ok",
+        total_seconds=time.perf_counter() - started,
+        diagnostics=diagnostics,
+        keyword_recall=keyword_recall(job_description, tailored),
+        selected_items=selected_item_count(tailored),
+        output_json=tailored.model_dump_json(),
+    )
+
+
+def run_benchmark(args: argparse.Namespace) -> None:
+    """Execute and persist a benchmark matrix."""
+    models = args.models or [model for model, _, _ in MODEL_SUITE]
+    available = installed_model_info()
+    missing = [model for model in models if model not in available]
+    if missing and not args.pull:
+        names = ", ".join(missing)
+        raise SystemExit(f"Models not installed: {names}. Re-run with --pull.")
+    for model in missing:
+        pull_model(model)
+    available = installed_model_info()
+
+    run_id = (
+        datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        + "-"
+        + uuid.uuid4().hex[:8]
+    )
+    connection = connect(args.database)
+    connection.execute(
+        "INSERT INTO benchmark_runs VALUES (?, ?, ?, ?, ?)",
+        (
+            run_id,
+            datetime.now(UTC).isoformat(),
+            command_output("ollama", "--version"),
+            str(args.cv),
+            16384,
+        ),
+    )
+    connection.executemany(
+        "INSERT INTO benchmark_models VALUES (?, ?, ?, ?)",
+        [
+            (run_id, model, available[model][0], available[model][1])
+            for model in models
+        ],
+    )
+    connection.commit()
+    cv = load_cv(args.cv)
+    total = len(models) * len(args.jobs) * args.repeat
+    position = 0
+    for model in models:
+        for job in args.jobs:
+            for repetition in range(1, args.repeat + 1):
+                position += 1
+                print(f"[{position}/{total}] {model} / {job.name} / run {repetition}")
+                result = benchmark_one(run_id, model, job, repetition, cv)
+                save_result(connection, result)
+                if result.status == "ok":
+                    print(
+                        f"  {result.total_seconds:.1f}s, "
+                        f"keyword recall {result.keyword_recall:.1%}, "
+                        f"{result.diagnostics.summary_attempts} summary attempt(s)"
+                    )
+                else:
+                    print(f"  ERROR: {result.error}")
+    print(f"Run {run_id} saved to {args.database}")
+    print_report(connection, run_id)
+
+
+def print_report(connection: sqlite3.Connection, run_id: str | None = None) -> None:
+    """Print aggregate results for a run, defaulting to the latest."""
+    if run_id is None:
+        row = connection.execute(
+            "SELECT run_id FROM benchmark_runs ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            raise SystemExit("No benchmark runs found.")
+        run_id = row[0]
+    rows = connection.execute(
+        """
+        SELECT model,
+               COUNT(*) AS cases,
+               SUM(status = 'ok') AS successes,
+               AVG(CASE WHEN status = 'ok' THEN total_seconds END) AS seconds,
+               AVG(CASE WHEN status = 'ok' THEN keyword_recall END) AS recall,
+               SUM(summary_fallback) AS fallbacks,
+               AVG(CASE WHEN status = 'ok' THEN summary_attempts END) AS attempts
+        FROM benchmark_results
+        WHERE run_id = ?
+        GROUP BY model
+        ORDER BY successes DESC, recall DESC, seconds ASC
+        """,
+        (run_id,),
+    ).fetchall()
+    diversity = model_diversity(connection, run_id)
+    print(f"\nBenchmark run: {run_id}")
+    print(
+        "model                         pass      avg s   recall  diversity  "
+        "fallback  attempts"
+    )
+    print("-" * 89)
+    for model, cases, successes, seconds, recall, fallbacks, attempts in rows:
+        duration = f"{seconds:.1f}" if seconds is not None else "-"
+        recall_text = f"{recall:.1%}" if recall is not None else "-"
+        diversity_text = (
+            f"{diversity[model]:.1%}" if diversity.get(model) is not None else "-"
+        )
+        attempts_text = f"{attempts:.2f}" if attempts is not None else "-"
+        print(
+            f"{model:<29} {successes:>2}/{cases:<2} {duration:>10} "
+            f"{recall_text:>8} {diversity_text:>10} {fallbacks:>9} "
+            f"{attempts_text:>9}"
+        )
+
+
+def model_diversity(
+    connection: sqlite3.Connection, run_id: str
+) -> dict[str, float | None]:
+    """Average dissimilarity between a model's outputs for different jobs."""
+    rows = connection.execute(
+        """
+        SELECT model, job, repetition, output_json
+        FROM benchmark_results
+        WHERE run_id = ? AND status = 'ok'
+        ORDER BY model, repetition, job
+        """,
+        (run_id,),
+    ).fetchall()
+    grouped: dict[tuple[str, int], list[set[str]]] = {}
+    for model, _job, repetition, output_json in rows:
+        cv = CV.model_validate_json(output_json)
+        signature = set(cv.skills) | set(cv.ai_native)
+        signature.update(bullet for role in cv.experience for bullet in role.bullets)
+        grouped.setdefault((model, repetition), []).append(signature)
+    values: dict[str, list[float]] = {}
+    for (model, _repetition), signatures in grouped.items():
+        for index, left in enumerate(signatures):
+            for right in signatures[index + 1 :]:
+                union = left | right
+                distance = 1 - len(left & right) / len(union) if union else 0.0
+                values.setdefault(model, []).append(distance)
+    models = {model for model, *_ in rows}
+    return {
+        model: sum(values[model]) / len(values[model]) if values.get(model) else None
+        for model in models
+    }
+
+
+def list_models() -> None:
+    """Display the curated model ladder and local installation status."""
+    available = installed_model_info()
+    print("model                         size      tier       installed")
+    print("-" * 67)
+    for model, size, tier in MODEL_SUITE:
+        print(f"{model:<29} {size:<9} {tier:<10} {'yes' if model in available else 'no'}")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    models_parser = subparsers.add_parser("models", help="show the curated model suite")
+    models_parser.set_defaults(handler=lambda args: list_models())
+
+    run_parser = subparsers.add_parser("run", help="run and persist benchmarks")
+    run_parser.add_argument("--cv", type=Path, required=True)
+    run_parser.add_argument("--jobs", type=Path, nargs="+", required=True)
+    run_parser.add_argument("--models", nargs="+")
+    run_parser.add_argument("--repeat", type=int, default=1)
+    run_parser.add_argument("--pull", action="store_true")
+    run_parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
+    run_parser.set_defaults(handler=run_benchmark)
+
+    report_parser = subparsers.add_parser("report", help="report a stored benchmark")
+    report_parser.add_argument("--run-id")
+    report_parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
+    report_parser.set_defaults(
+        handler=lambda args: print_report(connect(args.database), args.run_id)
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    if getattr(args, "repeat", 1) < 1:
+        raise SystemExit("--repeat must be at least 1.")
+    args.handler(args)
+
+
+if __name__ == "__main__":
+    main()
