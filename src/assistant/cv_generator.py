@@ -1,9 +1,10 @@
-"""Tailor a structured CV to a job description and render it as LaTeX/PDF."""
+"""Render a structured CV as LaTeX/PDF, optionally tailored to a job."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -26,6 +27,12 @@ class Experience(BaseModel):
     bullets: list[str] = Field(min_length=1)
 
 
+class PolishedExperience(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    experience: list[Experience]
+
+
 class Education(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -40,6 +47,8 @@ class Publication(BaseModel):
     title: str
     authors: str = ""
     date: str = ""
+    publisher: str = ""
+    doi: str = ""
     url: str = ""
 
 
@@ -64,6 +73,7 @@ class CV(BaseModel):
     links: list[str] = Field(default_factory=list)
     summary: str = ""
     skills: list[str] = Field(default_factory=list)
+    ai_native: list[str] = Field(default_factory=list)
     experience: list[Experience] = Field(default_factory=list)
     education: list[Education] = Field(default_factory=list)
     publications: list[Publication] = Field(default_factory=list)
@@ -77,8 +87,11 @@ TAILOR_PROMPT = ChatPromptTemplate.from_messages(
             """You tailor CVs for a job application. Return only valid JSON matching
 the supplied CV schema. Use only facts present in the source CV; never invent
 employers, dates, metrics, technologies, or qualifications. Reorder skills and
-experience for relevance, and rewrite bullets only to clarify existing evidence.
-Keep every claim truthful and concise.""",
+experience for relevance. Tailor the summary and select or rewrite experience
+bullets to highlight the most relevant responsibilities supported by the source CV.
+Keep the separate ai_native section in the output, adapting its wording for
+relevance without attributing its claims to specific employers. Keep every claim
+truthful and concise.""",
         ),
         (
             "human",
@@ -86,6 +99,45 @@ Keep every claim truthful and concise.""",
         ),
     ]
 )
+
+
+POLISH_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """Polish the wording of CV experience bullets for a general-purpose CV.
+Return only valid JSON with an "experience" array in the same structure as the
+input. Keep every company, role, date, position and bullet in the same order;
+output exactly one bullet for each input bullet. Preserve ALL facts, tools,
+clients, time spans, responsibilities and qualifications from each bullet.
+Do not shorten by dropping details or invent anything. Use consistent tense:
+present for current work, past for previous roles. For consecutive bullets about
+the same client, the input already names the client in the first bullet only;
+preserve that grouping and make subsequent bullets read naturally in context.
+Keep other sections untouched.""",
+        ),
+        ("human", "Source experience JSON:\n{experience_json}"),
+    ]
+)
+
+
+CLIENT_PREFIX = re.compile(r"^([^:()]+?)(?: \([^)]*\))?: ")
+
+
+def group_client_bullets(experience: Experience) -> Experience:
+    """Avoid repeating a client's name in consecutive bullets about its project."""
+    bullets = []
+    previous_client = None
+    for bullet in experience.bullets:
+        match = CLIENT_PREFIX.match(bullet)
+        client = match.group(1) if match else None
+        bullets.append(
+            bullet[match.end():]
+            if match is not None and client == previous_client
+            else bullet
+        )
+        previous_client = client
+    return experience.model_copy(update={"bullets": bullets})
 
 
 def load_cv(path: Path) -> CV:
@@ -121,6 +173,32 @@ def tailor_cv(
         raise ValueError("The language model returned invalid CV JSON.") from exc
 
 
+def polish_cv(cv: CV, *, model: str = MODEL, llm: Any | None = None) -> CV:
+    """Polish experience prose without selecting or filtering CV content."""
+    chain = POLISH_PROMPT | (
+        llm if llm is not None else OllamaLLM(model=model, format="json", temperature=0)
+    ) | StrOutputParser()
+    response = chain.invoke(
+        {
+            "experience_json": json.dumps(
+                [group_client_bullets(item).model_dump() for item in cv.experience],
+                indent=2,
+            ),
+        }
+    )
+    try:
+        polished = PolishedExperience.model_validate_json(response)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("The language model returned invalid experience JSON.") from exc
+    if len(polished.experience) != len(cv.experience) or any(
+        (item.company, item.role, item.dates, len(item.bullets))
+        != (source.company, source.role, source.dates, len(source.bullets))
+        for item, source in zip(polished.experience, cv.experience)
+    ):
+        raise ValueError("The language model changed the experience structure.")
+    return cv.model_copy(update={"experience": polished.experience})
+
+
 def escape_latex(value: str) -> str:
     """Escape text inserted into a LaTeX document."""
     replacements = {
@@ -146,7 +224,7 @@ def to_latex(cv: CV) -> str:
         if value
     )
     lines = [
-        r"\documentclass[10pt,a4paper]{article}",
+        r"\documentclass[12pt,a4paper]{article}",
         r"\usepackage[margin=1.6cm]{geometry}",
         r"\usepackage[hidelinks]{hyperref}",
         r"\usepackage{enumitem}",
@@ -160,6 +238,13 @@ def to_latex(cv: CV) -> str:
         lines += [r"\section*{Profile}", escape_latex(cv.summary)]
     if cv.skills:
         lines += [r"\section*{Skills}", escape_latex(", ".join(cv.skills))]
+    if cv.ai_native:
+        lines += [
+            r"\section*{AI-Native Practice}",
+            r"\begin{itemize}",
+            *[rf"\item {escape_latex(bullet)}" for bullet in cv.ai_native],
+            r"\end{itemize}",
+        ]
     if cv.experience:
         lines.append(r"\section*{Experience}")
         for item in cv.experience:
@@ -180,11 +265,17 @@ def to_latex(cv: CV) -> str:
     if cv.publications:
         lines.append(r"\section*{Publications}")
         for item in cv.publications:
-            details = " -- ".join(
+            details_parts = [
                 escape_latex(value)
-                for value in [item.authors, item.date, item.url]
+                for value in [item.authors, item.date, item.publisher]
                 if value
-            )
+            ]
+            if item.doi:
+                doi = escape_latex(item.doi)
+                details_parts.append(rf"\href{{https://doi.org/{doi}}}{{DOI: {doi}}}")
+            elif item.url:
+                details_parts.append(escape_latex(item.url))
+            details = " -- ".join(details_parts)
             lines.append(
                 rf"\noindent\textbf{{{escape_latex(item.title)}}}"
                 + (rf" ({details})" if details else "")
@@ -236,25 +327,25 @@ def write_pdf(latex: str, output: Path) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Tailor a JSON CV and export it as PDF."
+        description="Export a complete JSON CV as PDF, optionally tailored to a job."
     )
     parser.add_argument("--cv", type=Path, required=True, help="Source CV JSON file")
     parser.add_argument(
-        "--job", type=Path, required=True, help="Job description text file"
+        "--job", type=Path, help="Job description text file (omit for the full CV)"
     )
     parser.add_argument("--output", type=Path, required=True, help="Output PDF path")
     parser.add_argument("--model", default=MODEL, help="Ollama model name")
     args = parser.parse_args()
 
-    tailored = tailor_cv(
-        load_cv(args.cv),
-        args.job.read_text(encoding="utf-8"),
-        model=args.model,
-    )
+    cv = load_cv(args.cv)
+    if args.job is not None:
+        cv = tailor_cv(cv, args.job.read_text(encoding="utf-8"), model=args.model)
+    else:
+        cv = polish_cv(cv, model=args.model)
+    write_pdf(to_latex(cv), args.output)
     args.output.with_suffix(".json").write_text(
-        tailored.model_dump_json(indent=2), encoding="utf-8"
+        cv.model_dump_json(indent=2), encoding="utf-8"
     )
-    write_pdf(to_latex(tailored), args.output)
     print(f"Created {args.output}")
 
 

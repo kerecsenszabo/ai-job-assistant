@@ -61,11 +61,20 @@ python3 --version    # should show 3.12+
 | **FastAPI** | Web framework | Backend for the final production app |
 | **Gradio** | ML UI framework | Quick UI for testing features as you build |
 
-### Tailoring a CV for a job
+### Generating a CV
 
 Keep your source CV in the small, portable JSON format shown in
 [`data/cv.example.json`](data/cv.example.json). Copy it to `data/cv.json` and
-replace the example content. Then save a job description as a text file and
+replace the example content. To generate a complete general-purpose CV with
+every source section and experience bullet, run:
+
+```bash
+uv run python -m assistant.cv_generator \
+  --cv data/cv.json \
+  --output output/cv.pdf
+```
+
+To tailor it to a particular job, save the job description as a text file and
 run:
 
 ```bash
@@ -75,9 +84,15 @@ uv run python -m assistant.cv_generator \
   --output output/target-cv.pdf
 ```
 
-The local Ollama model only reorders and rewrites evidence already present in
-the source CV. The tailored JSON is saved beside the PDF. PDF creation uses
-`pdflatex` when available, or Tectonic as a user-level alternative:
+Both commands use the local Ollama model. Without `--job`, it polishes the
+experience prose (including repeated project names) without filtering bullets
+or changing other sections. With `--job`, it selects and rewrites evidence for
+the posting. An optional `"ai_native": ["..."]`
+list in the source JSON provides a separate AI-Native Practice section for
+cross-role AI tooling and projects; job-specific tailoring keeps it separate
+from employer-specific experience. The generated JSON is saved beside the PDF.
+PDF creation uses `pdflatex` when available, or Tectonic as a user-level
+alternative:
 
 ```bash
 brew install tectonic
