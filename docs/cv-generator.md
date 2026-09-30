@@ -60,10 +60,16 @@ imported facts must first be confirmed and placed in the source JSON.
 
 With `--job`, generation follows an evidence-first pipeline:
 
-1. Parse atomic job requirements with source quotes, distinguishing required,
+1. Parse source-linked job requirements with atomic criteria, distinguishing required,
    preferred, responsibilities, and explicit eligibility constraints. Explicit
    source sections determine priority: English under required qualifications
-   cannot be reclassified as a nice-to-have.
+   cannot be reclassified as a nice-to-have. Long descriptions are extracted in
+   bounded source-line chunks to avoid repetitive, truncated JSON from small
+   models. Source IDs supply requirement text and quotes; generated criteria and
+   options remain validated against those quotes. Invalid extraction is retried
+   up to twice with validation feedback, then fails explicitly with the specific
+   error. This can increase first-run model calls; cached job analyses still
+   avoid repeated extraction.
 2. Match requirements against the **complete original CV**, with stable evidence
    IDs and explanations. Explicit technology and language criteria are resolved
    locally without model calls. Only unresolved semantic criteria go to the

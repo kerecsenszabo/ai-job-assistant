@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 from langchain_core.runnables import RunnableLambda
@@ -8,6 +9,7 @@ from assistant.cv_tailoring import (
     DraftSentence,
     EvidenceItem,
     Matches,
+    ModelOutputError,
     ParsedJob,
     Requirement,
     RequirementCriterion,
@@ -18,13 +20,18 @@ from assistant.cv_tailoring import (
     checked_matches,
     enforce_match_rules,
     explicit_criterion_match,
+    job_description_chunks,
+    job_extraction_schema,
     match_job,
     mechanical_rejection,
     parse_job,
     polish_with_report,
+    request,
     score_matches,
     select_evidence,
     source_evidence,
+    source_option,
+    source_option_pattern,
     tailor_with_report,
     unkey_semantic_decisions,
 )
@@ -347,6 +354,138 @@ def test_requirement_quotes_and_deduplication():
     llm, _ = fake_llm([{"requirements": items}])
     with pytest.raises(ValueError, match="source quote"):
         parse_job(llm, "SQL only")
+
+
+def test_request_exposes_output_schema_in_prompt():
+    llm, calls = fake_llm([{"requirements": []}])
+    request(llm, ParsedJob, "Parse the job.", {"job_description": "Python"})
+    prompt, kwargs = calls[0]
+    system = prompt.to_messages()[0].content
+    assert json.loads(system.split("Output JSON schema:\n", 1)[1]) == kwargs["format"]
+    assert kwargs["format"] == ParsedJob.model_json_schema()
+
+
+def test_parse_job_exposes_custom_constraints_in_prompt():
+    llm, calls = fake_llm([{"requirements": []}])
+    parse_job(llm, "Python")
+    prompt, kwargs = calls[0]
+    system = prompt.to_messages()[0].content
+    assert json.loads(system.split("Output JSON schema:\n", 1)[1]) == kwargs["format"]
+    requirement = kwargs["format"]["$defs"]["Requirement"]
+    assert "criteria" in requirement["required"]
+    assert requirement["properties"]["criteria"]["minItems"] == 1
+
+
+def keyed_requirement(options=None):
+    return {"requirements": {"source/0": {
+        "importance": "required",
+        "criteria": [{
+            "text": "Python", "kind": "technology",
+            "options": ["Python"] if options is None else options,
+        }],
+    }}}
+
+
+def test_parse_job_attaches_source_text_and_stable_ids():
+    llm, calls = fake_llm([keyed_requirement()])
+    parsed = parse_job(llm, "Build Python pipelines.").requirements[0]
+    assert parsed.text == parsed.quote == "Build Python pipelines."
+    assert parsed.id == "requirement/0"
+    assert parsed.criteria[0].quote in parsed.quote
+    assert parsed.criteria[0].id == "requirement/0/criterion/0"
+    assert len(calls) == 1
+
+
+def test_parse_job_accepts_non_assessable_source_lines():
+    llm, _ = fake_llm([{"requirements": {"source/0": None}}])
+    assert parse_job(llm, "Employee benefits").requirements == []
+
+
+def test_parse_job_retries_invalid_options_with_validation_feedback():
+    llm, calls = fake_llm([keyed_requirement(["Rust"]), keyed_requirement()])
+    parsed = parse_job(llm, "Python")
+    assert parsed.requirements[0].criteria[0].options == ["Python"]
+    assert len(calls) == 2
+    assert "'Rust'" in calls[1][0].to_messages()[0].content
+
+
+@pytest.mark.parametrize("response", [
+    "invalid JSON",
+    keyed_requirement(["Rust"]),
+    {"requirements": {"unknown/source": None}},
+])
+def test_parse_job_exhausted_retries_fail_explicitly(response):
+    llm, calls = fake_llm([response] * 3)
+    with pytest.raises(ModelOutputError):
+        parse_job(llm, "Python")
+    assert len(calls) == 3
+
+
+def test_long_job_parsing_preserves_original_section_priority():
+    first_line = "Build Python pipelines. " + "Reliable " * 85
+    description = first_line + "\nNice-to-have\nAWS"
+    assert len(description) > 800
+    aws = keyed_requirement(["AWS"])
+    aws["requirements"]["source/0"]["criteria"][0]["text"] = "AWS"
+    llm, calls = fake_llm([
+        keyed_requirement(), {"requirements": {}}, aws,
+    ])
+    parsed = parse_job(llm, description)
+    assert len(calls) == 3
+    assert [item.id for item in parsed.requirements] == ["requirement/0", "requirement/1"]
+    assert parsed.requirements[1].importance == "preferred"
+    assert parsed.requirements[0].quote == first_line.strip()
+
+
+def test_job_chunks_preserve_source_content():
+    description = "Python and SQL\n" + "Build reliable pipelines " * 100
+    chunks = job_description_chunks(description)
+    assert all(len(chunk) <= 800 for chunk in chunks)
+    assert " ".join(description.split()) == " ".join(" ".join(chunks).split())
+    assert job_description_chunks("") == [""]
+
+
+def test_extraction_schema_bounds_arrays_by_source_size():
+    schema = job_extraction_schema({"source/0": "Python or Amazon Web Services"})
+    requirement = schema["properties"]["requirements"]["properties"]["source/0"]["anyOf"][0]
+    assert requirement["properties"]["criteria"]["maxItems"] == 5
+    assert "text" not in requirement["properties"]
+    criteria = requirement["properties"]["criteria"]["items"]["oneOf"]
+    assert criteria[0]["properties"]["options"]["maxItems"] == 0
+    assert criteria[1]["properties"]["options"]["maxItems"] == 5
+
+
+@pytest.mark.parametrize("option, quote, expected", [
+    ("tool_integration", "Build tool integration.", "tool integration"),
+    ("execution-history", "Build execution history.", "execution history"),
+    ("world's", "The world\u2019s infrastructure", "world\u2019s"),
+    ("Rust", "Python services", "Rust"),
+    ("C++", "C services", "C++"),
+    ("foo-bar", "foo bar and foo-bar", "foo-bar"),
+])
+def test_source_option_repair_is_limited_to_source_formatting(option, quote, expected):
+    assert source_option(option, quote) == expected
+
+
+def test_source_option_pattern_preserves_multiword_and_punctuated_names():
+    pattern = source_option_pattern("Use .NET, C++, and Amazon Web Services.")
+    for option in (".NET", "C++", "Amazon Web Services"):
+        assert re.fullmatch(pattern, option)
+    for option in ("Rust", "C--", "Amazon Cloud Services", ""):
+        assert re.fullmatch(pattern, option) is None
+
+
+@pytest.mark.parametrize("response, detail", [
+    ('{"requirements": [', "EOF"),
+    ('{"requirements": [{}]}', "requirements.0.text: Field required"),
+])
+def test_request_reports_validation_details_without_discarding_response(response, detail):
+    llm, calls = fake_llm([response])
+    with pytest.raises(ModelOutputError, match="invalid ParsedJob JSON") as caught:
+        request(llm, ParsedJob, "Parse the job.", {})
+    assert detail in str(caught.value)
+    assert caught.value.response == response
+    assert len(calls) == 1
 
 
 def test_requirement_quotes_allow_wrapped_hyphenated_names():
