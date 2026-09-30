@@ -115,9 +115,10 @@ MacTeX also works if an administrator can install it:
 The benchmark runner compares Ollama models on the actual CV-tailoring workload
 and stores every result in SQLite. The curated 10-model ladder covers Qwen,
 Llama, Gemma and Mistral from 1.7B through 14B, plus `gpt-oss:20b` as the
-largest practical candidate for a 24 GiB Mac. Hidden reasoning is disabled for
-all models so structured JSON is read from the same output channel and latency
-remains comparable.
+largest practical candidate for a 24 GiB Mac. Hidden reasoning is disabled
+wherever the model supports it, so structured JSON is read from the same output
+channel and latency remains comparable; `gpt-oss` is the exception, as it
+returns an empty reply when thinking is switched off.
 
 ```bash
 # See the 10-model suite and which models are already installed

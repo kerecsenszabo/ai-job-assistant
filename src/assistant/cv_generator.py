@@ -16,12 +16,14 @@ from typing import Annotated, Any
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
-from langchain_ollama import OllamaLLM
+from langchain_ollama import ChatOllama
 from pydantic import BaseModel, ConfigDict, Field
 
 MODEL = "llama3.1:8b"
 # Source CV + job description + full JSON reply exceeds Ollama's default window.
 CONTEXT_TOKENS = 16384
+# Models that answer with an empty string when reasoning is switched off.
+REASONING_REQUIRED = ("gpt-oss",)
 MIN_SKILLS = 8
 MAX_SKILLS = 10
 MIN_AI_NATIVE = 2
@@ -41,11 +43,16 @@ class TailorDiagnostics:
     summary_fallback: bool = False
 
 
-def local_llm(model: str) -> OllamaLLM:
-    """Local LLM with room for a full CV round-trip."""
-    return OllamaLLM(
+def local_llm(model: str) -> ChatOllama:
+    """Local LLM with room for a full CV round-trip.
+
+    Uses the chat endpoint, and leaves reasoning at the model default for
+    harmony-style models: ``gpt-oss`` returns an empty reply to both
+    completion requests and requests that disable thinking.
+    """
+    return ChatOllama(
         model=model,
-        reasoning=False,
+        reasoning=None if model.startswith(REASONING_REQUIRED) else False,
         temperature=0,
         num_ctx=CONTEXT_TOKENS,
     )
