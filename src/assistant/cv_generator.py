@@ -8,18 +8,21 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import httpx
 from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
     from assistant.cv_tailoring import TailoringReport
+    from assistant.performance import RunPerformance
 
-MODEL = "granite4.2:8b"
+MODEL = "granite4.2:3b"
 # Source CV + job description + full JSON reply exceeds Ollama's default window.
 CONTEXT_TOKENS = 16384
 # Models that answer with an empty string when reasoning is switched off.
@@ -38,6 +41,7 @@ class TailorDiagnostics:
     summary_attempts: int = 0
     summary_fallback: bool = False
     report: TailoringReport | None = None
+    performance: RunPerformance | None = None
 
 
 def local_llm(model: str) -> ChatOllama:
@@ -58,6 +62,31 @@ def local_llm(model: str) -> ChatOllama:
 def structured_llm(llm: Runnable, schema: type[BaseModel]) -> Runnable:
     """Constrain an Ollama request to the JSON schema for *schema*."""
     return llm.bind(format=schema.model_json_schema())
+
+
+class _InstalledModel(BaseModel):
+    name: str
+    digest: str
+
+
+class _InstalledModels(BaseModel):
+    models: list[_InstalledModel]
+
+
+def local_model_identity(llm: ChatOllama) -> str:
+    """Include installed weights and inference settings in matching-cache keys."""
+    base_url = llm.base_url or "http://localhost:11434"
+    response = httpx.get(f"{base_url.rstrip('/')}/api/tags", timeout=5)
+    response.raise_for_status()
+    installed = _InstalledModels.model_validate_json(response.text)
+    name = llm.model if ":" in llm.model else f"{llm.model}:latest"
+    matched = next((item for item in installed.models if item.name == name), None)
+    if matched is None:
+        raise ValueError(f"Cannot identify installed model {name} for matching cache.")
+    return json.dumps({
+        "model": name, "digest": matched.digest, "temperature": llm.temperature,
+        "num_ctx": llm.num_ctx, "reasoning": llm.reasoning,
+    }, sort_keys=True)
 
 
 class Experience(BaseModel):
@@ -97,6 +126,13 @@ class Certification(BaseModel):
     url: str = ""
 
 
+class Language(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, pattern=r"\S")
+    proficiency: str = Field(min_length=1, pattern=r"\S")
+
+
 class CV(BaseModel):
     """The intentionally small, portable JSON representation of a CV."""
 
@@ -114,6 +150,7 @@ class CV(BaseModel):
     education: list[Education] = Field(default_factory=list)
     publications: list[Publication] = Field(default_factory=list)
     certifications: list[Certification] = Field(default_factory=list)
+    languages: list[Language] = Field(default_factory=list)
 
 
 CLIENT_PREFIX = re.compile(r"^([^:()]+?)(?: \([^)]*\))?: ")
@@ -154,12 +191,25 @@ def tailor_cv(
     model: str = MODEL,
     llm: Runnable | None = None,
     diagnostics: TailorDiagnostics | None = None,
+    job_cache: Path | None = None,
+    refresh_job_analysis: bool = False,
+    matching_cache: Path | None = None,
+    refresh_matching: bool = False,
+    model_identity: str | None = None,
 ) -> CV:
     """Tailor from source evidence; expose the full audit through diagnostics."""
     from assistant.cv_tailoring import tailor_with_report
 
+    model_llm = llm or local_llm(model)
+    if matching_cache is not None and model_identity is None:
+        if not isinstance(model_llm, ChatOllama):
+            raise ValueError("A custom model needs model_identity to cache matching.")
+        model_identity = local_model_identity(model_llm)
     result, report = tailor_with_report(
-        cv, job_description, llm or local_llm(model), diagnostics
+        cv, job_description, model_llm, diagnostics,
+        job_cache=job_cache, refresh_job_analysis=refresh_job_analysis,
+        matching_cache=matching_cache, refresh_matching=refresh_matching,
+        model_identity=model_identity,
     )
     if diagnostics is None:
         for warning in report.warnings:
@@ -233,6 +283,13 @@ def to_latex(cv: CV) -> str:
                 *[rf"\item {escape_latex(bullet)}" for bullet in item.bullets],
                 r"\end{itemize}",
             ]
+    if cv.languages:
+        lines += [
+            r"\section*{Languages}",
+            escape_latex(", ".join(
+                f"{language.name}: {language.proficiency}" for language in cv.languages
+            )),
+        ]
     if cv.education:
         lines.append(r"\section*{Education}")
         for item in cv.education:
@@ -304,6 +361,7 @@ def write_pdf(latex: str, output: Path) -> Path:
 
 
 def main() -> None:
+    started = time.perf_counter()
     from assistant.cv_tailoring import (
         ScoringRubric,
         polish_with_report,
@@ -322,31 +380,72 @@ def main() -> None:
     parser.add_argument(
         "--rubric", type=Path, help="Optional scoring rubric JSON with requirement weights"
     )
+    parser.add_argument(
+        "--job-cache", type=Path, default=Path("output/job-requirements"),
+        help="Directory for reusable parsed job analyses (default: output/job-requirements)",
+    )
+    parser.add_argument(
+        "--refresh-job-analysis", action="store_true",
+        help="Reparse the job and replace its cached analysis",
+    )
+    parser.add_argument(
+        "--matching-cache", type=Path, default=Path("output/cv-matches"),
+        help="Private cache of completed CV/job matching analyses",
+    )
+    parser.add_argument(
+        "--refresh-matching", action="store_true",
+        help="Recompute matching instead of reusing a completed analysis",
+    )
+    parser.add_argument(
+        "--no-matching-cache", action="store_true",
+        help="Disable completed matching cache for this run",
+    )
     args = parser.parse_args()
+    if args.refresh_job_analysis and args.job is None:
+        parser.error("--refresh-job-analysis requires --job")
+    if args.refresh_matching and args.job is None:
+        parser.error("--refresh-matching requires --job")
 
     cv = load_cv(args.cv)
     llm = local_llm(args.model)
     if args.job is not None:
+        matching_cache = None if args.no_matching_cache else args.matching_cache
+        identity = local_model_identity(llm) if matching_cache is not None else None
         rubric = (
             ScoringRubric.model_validate_json(args.rubric.read_text(encoding="utf-8"))
             if args.rubric is not None else None
         )
         cv, report = tailor_with_report(
-            cv, args.job.read_text(encoding="utf-8"), llm, rubric=rubric
+            cv, args.job.read_text(encoding="utf-8"), llm, rubric=rubric,
+            job_cache=args.job_cache, refresh_job_analysis=args.refresh_job_analysis,
+            matching_cache=matching_cache, refresh_matching=args.refresh_matching,
+            model_identity=identity,
         )
     else:
         if args.rubric is not None:
             parser.error("--rubric requires --job")
         cv, report = polish_with_report(cv, llm)
+    export_started = time.perf_counter()
     write_pdf(to_latex(cv), args.output)
     args.output.with_suffix(".json").write_text(
         cv.model_dump_json(indent=2), encoding="utf-8"
     )
     report_path = args.output.with_suffix(".report.json")
+    report.performance.stage_seconds["export"] = time.perf_counter() - export_started
+    report.performance.total_seconds = time.perf_counter() - started
     report_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
     for warning in report.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
     if args.job is not None:
+        print(
+            "Job analysis: reused cached requirements."
+            if report.job_analysis_cached
+            else "Job analysis: parsed and cached requirements."
+        )
+        print(
+            "Matching analysis: "
+            + ("reused cached results." if report.matching_analysis_cached else "computed.")
+        )
         match = (
             f"{report.match_percent:.1f}%"
             if report.match_percent is not None else "insufficient information"
@@ -358,6 +457,15 @@ def main() -> None:
             print("Warning: unresolved eligibility constraints; see the report.", file=sys.stderr)
     print(f"Created {args.output}")
     print(f"Evidence and rewrite report: {report_path}")
+    print(
+        f"Performance: {report.performance.total_seconds:.1f}s, "
+        f"{report.performance.total_model_calls} model call(s)"
+    )
+    for stage, calls in report.performance.stage_model_calls.items():
+        print(
+            f"  {stage}: {calls} call(s), "
+            f"{report.performance.stage_model_seconds[stage]:.1f}s"
+        )
 
 
 if __name__ == "__main__":

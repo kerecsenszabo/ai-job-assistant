@@ -85,16 +85,29 @@ uv run python -m assistant.cv_generator \
 ```
 
 Both commands use the local Ollama model (`--model` overrides the default
-`granite4.2:8b`). The JSON CV is the authoritative source of candidate facts;
+`granite4.2:3b`). The JSON CV is the authoritative source of candidate facts;
 the job description only determines what to emphasize. All processing stays local.
 
 With `--job`, generation follows an evidence-first pipeline:
 
 1. Parse atomic job requirements with source quotes, distinguishing required,
-   preferred, responsibilities, and explicit eligibility constraints.
+   preferred, responsibilities, and explicit eligibility constraints. Explicit
+   source sections determine priority: English under required qualifications
+   cannot be reclassified as a nice-to-have.
 2. Match requirements against the **complete original CV**, with stable evidence
-   IDs and explanations. Independently review these matches as direct, partial,
-   not evidenced, or unclear. Missing evidence does not mean you lack the skill.
+   IDs and explanations. Explicit technology and language criteria are resolved
+   locally without model calls. Only unresolved semantic criteria go to the
+   model, with retrieved source evidence and a separate verification pass,
+   rather than repeatedly resending the complete CV. Missing evidence does not
+   mean you lack the skill; retrieved context can also miss relevant evidence.
+   Requirements contain individual criteria with explicit **any-of** and
+   **all-of** technology groups. One supported option fully satisfies an any-of
+   group (for example, scikit-learn or XGBoost), while all-of groups require
+   every option. Production framework credit requires the named technology and
+   explicit production use together in work evidence. Language proficiency
+   requires an explicit language statement; stakeholder collaboration or an
+   English-written CV cannot establish it. Criterion decisions and rule
+   corrections are included in the report.
 3. Calculate deterministic **CV-evidenced job match** and must-have coverage.
    Required and eligibility items have weight 3; preferred items and
    responsibilities have weight 1. Direct matches earn full credit, partial
@@ -111,18 +124,55 @@ With `--job`, generation follows an evidence-first pipeline:
    terms, and changed client prefixes. A global skill never authorizes adding
    that technology to a particular role.
 
-Supported rewrites export automatically. Rejected, uncertain, or malformed
-rewrite/review responses retain original wording and produce visible warnings.
+Supported rewrites export automatically. Draft and review schemas constrain
+exact target keys. A missing, rejected, uncertain, or malformed bullet retains
+only that bullet's original wording; other valid bullets still export after
+review. Unchanged originals need no review call, and mechanical rejections
+happen before model review. Whole unreadable responses retain original wording
+and produce visible warnings.
 If any proposed summary sentence fails, the whole original summary is retained.
 Service/transport errors still propagate; they are not disguised as successful
 generation. Model-based evidence review reduces risk but **cannot guarantee
 perfect factual accuracy**; inspect the audit before submitting an application.
 Rewriting never changes the match score, which comes only from original evidence.
 
+The CLI saves parsed job requirements in `output/job-requirements/`, keyed by
+the job description's content hash and a cache format version. CV edits and
+model changes reuse the same parsed job rubric instead of redefining it on
+every run. Changes to the job description create a new analysis. Use
+`--job-cache path/to/cache` to choose a different directory or
+`--refresh-job-analysis` to deliberately reparse the job. Corrupt or incompatible
+cache records produce an actionable error, not a silent reparse. The cache stores
+job requirements only, never candidate evidence. General semantic criteria still
+use model-reviewed judgments; caching stabilizes requirements and weighting,
+not a guarantee of identical model judgments or percentages.
+The benchmark runner shares this cache (`--job-cache` overrides it), so models
+and repeated runs assess the same parsed requirements rather than different
+model-specific scoring rubrics.
+
+Completed matching is cached separately in `output/cv-matches/`. Its key includes
+the source CV, job description, parsed criteria, rubric, model name and installed
+weights digest, inference settings, schema, and matching-analysis version.
+Unchanged exports reuse the completed matches and score; CV edits, new weights,
+or a changed rubric invalidate them. Use `--matching-cache path/to/cache` to
+choose a directory, `--refresh-matching` to recompute, or `--no-matching-cache`
+for an uncached run. Refreshing job analysis also refreshes matching. These
+files contain personal match explanations and must stay private.
+
+The CLI prints total elapsed time and per-stage model-call counts/durations.
+The same measurements, including matching-cache reuse, are saved under
+`performance` in the report. A warm matching cache removes matching calls,
+but generation and verification of genuinely changed wording still run.
+
 Without `--job`, the same rewrite safeguards polish every experience bullet
 without filtering content or rewriting the summary. Contact details, employer
 names, roles, dates, education, publications and certifications are copied from
 the source in both modes.
+
+An optional `"languages": [{"name": "English", "proficiency": "Native"}]`
+list renders a separate Languages section, is preserved in both export modes,
+and provides explicit evidence for job-language requirements. Proficiency is
+copied exactly from the source CV, never inferred or upgraded by the model.
 
 An optional `"ai_native": ["..."]` list in the source JSON provides a separate
 AI-Native Practice section for cross-role AI tooling and projects. The generated

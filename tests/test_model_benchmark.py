@@ -174,7 +174,7 @@ def test_benchmark_one_collects_report_and_keyword_proxies(
     job.write_text("Python Kubernetes", encoding="utf-8")
     calls = []
 
-    def tailor(source, description, *, model, diagnostics):
+    def tailor(source, description, *, model, diagnostics, job_cache=None):
         calls.append((source, description, model))
         diagnostics.report = report if with_report else None
         diagnostics.selection_seconds = 1.25
@@ -210,11 +210,27 @@ def test_empty_report_distinguishes_zero_verdicts_from_missing_report():
     assert benchmark.report_metrics(TailorDiagnostics()) == {}
 
 
+def test_benchmark_can_reuse_the_shared_job_rubric(workspace, monkeypatch, cv):
+    job = workspace / "job.txt"
+    job.write_text("Python", encoding="utf-8")
+    cache = workspace / "job-cache"
+    calls = []
+
+    def tailor(source, description, *, model, diagnostics, job_cache):
+        calls.append(job_cache)
+        return source
+
+    monkeypatch.setattr(benchmark, "tailor_cv", tailor)
+    measured = benchmark.benchmark_one("run", "model", job, 1, cv, job_cache=cache)
+    assert measured.status == "ok"
+    assert calls == [cache]
+
+
 def test_benchmark_failure_preserves_available_report(workspace, monkeypatch, cv, report):
     job = workspace / "job.txt"
     job.write_text("Python", encoding="utf-8")
 
-    def fail(source, description, *, model, diagnostics):
+    def fail(source, description, *, model, diagnostics, job_cache=None):
         diagnostics.report = report
         raise RuntimeError("generation failed")
 

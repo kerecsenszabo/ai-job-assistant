@@ -16,6 +16,7 @@ from pathlib import Path
 from assistant.cv_generator import CV, TailorDiagnostics, load_cv, tailor_cv
 
 DEFAULT_DATABASE = Path("output/model-benchmarks.sqlite")
+DEFAULT_JOB_CACHE = Path("output/job-requirements")
 MODEL_SUITE = (
     ("qwen3.5:0.8b", "1.0 GB", "basic"),
     ("granite4.2:3b", "2.2 GB", "basic"),
@@ -295,6 +296,8 @@ def benchmark_one(
     job_path: Path,
     repetition: int,
     cv: CV,
+    *,
+    job_cache: Path | None = None,
 ) -> BenchmarkResult:
     """Run one model against one job and collect workload-specific metrics."""
     job_description = job_path.read_text(encoding="utf-8")
@@ -306,6 +309,7 @@ def benchmark_one(
             job_description,
             model=model,
             diagnostics=diagnostics,
+            job_cache=job_cache,
         )
     except Exception as exc:
         return BenchmarkResult(
@@ -390,7 +394,9 @@ def run_benchmark(args: argparse.Namespace) -> None:
             for repetition in range(1, args.repeat + 1):
                 position += 1
                 print(f"[{position}/{total}] {model} / {job.name} / run {repetition}")
-                result = benchmark_one(run_id, model, job, repetition, cv)
+                result = benchmark_one(
+                    run_id, model, job, repetition, cv, job_cache=args.job_cache
+                )
                 save_result(connection, result)
                 if result.status == "ok":
                     print(
@@ -572,6 +578,7 @@ def parse_args() -> argparse.Namespace:
     run_parser.add_argument("--repeat", type=int, default=1)
     run_parser.add_argument("--pull", action="store_true")
     run_parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
+    run_parser.add_argument("--job-cache", type=Path, default=DEFAULT_JOB_CACHE)
     run_parser.set_defaults(handler=run_benchmark)
 
     report_parser = subparsers.add_parser("report", help="report a stored benchmark")

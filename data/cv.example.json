@@ -4,6 +4,9 @@
   "phone": "+00 000 000 0000",
   "location": "City, Country",
   "links": ["https://www.linkedin.com/in/example"],
+  "languages": [
+    {"name": "English", "proficiency": "Professional working proficiency"}
+  ],
   "summary": "Short profile describing what you build, how many years of experience you have and the kind of problems you solve. Keep it factual: every claim here should be supported by the experience below.",
   "skills": [
     "Production ML Systems",
