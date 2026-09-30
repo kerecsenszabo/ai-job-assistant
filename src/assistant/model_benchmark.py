@@ -17,16 +17,12 @@ from assistant.cv_generator import CV, TailorDiagnostics, load_cv, tailor_cv
 
 DEFAULT_DATABASE = Path("output/model-benchmarks.sqlite")
 MODEL_SUITE = (
-    ("qwen3:1.7b", "1.4 GB", "basic"),
-    ("llama3.2:3b", "2.0 GB", "basic"),
-    ("qwen3:4b", "2.5 GB", "small"),
-    ("gemma3:4b", "3.3 GB", "small"),
-    ("mistral:7b", "4.1 GB", "balanced"),
-    ("llama3.1:8b", "4.9 GB", "balanced"),
-    ("qwen3:8b", "5.2 GB", "balanced"),
-    ("gemma3:12b", "8.1 GB", "advanced"),
-    ("qwen3:14b", "9.3 GB", "advanced"),
-    ("gpt-oss:20b", "14 GB", "advanced"),
+    ("qwen3.5:0.8b", "1.0 GB", "basic"),
+    ("granite4.2:3b", "2.2 GB", "basic"),
+    ("granite4.2:8b", "5.3 GB", "balanced"),
+    ("lfm2.5:8b", "5.2 GB", "balanced"),
+    ("gemma4:12b", "8.0 GB", "advanced"),
+    ("gemma4:26b-a4b", "18 GB", "advanced"),
 )
 WORD = re.compile(r"[a-z][a-z0-9+#.-]{2,}")
 STOPWORDS = {
@@ -136,6 +132,19 @@ def installed_model_info() -> dict[str, tuple[str, str]]:
 def pull_model(model: str) -> None:
     """Install one model through Ollama."""
     subprocess.run(["ollama", "pull", model], check=True)
+
+
+def unload_model(model: str) -> None:
+    """Evict a model from memory so the next one starts from a clean state.
+
+    Ollama otherwise keeps each model resident for five minutes, which leaves
+    several ``llama-server`` processes holding unified memory at once.
+    """
+    subprocess.run(
+        ["ollama", "stop", model],
+        check=False,
+        capture_output=True,
+    )
 
 
 def keywords(text: str) -> set[str]:
@@ -285,9 +294,11 @@ def run_benchmark(args: argparse.Namespace) -> None:
                         f"  {result.total_seconds:.1f}s, "
                         f"keyword recall {result.keyword_recall:.1%}, "
                         f"{result.diagnostics.summary_attempts} summary attempt(s)"
+                        + (", source summary kept" if result.diagnostics.summary_fallback else "")
                     )
                 else:
                     print(f"  ERROR: {result.error}")
+        unload_model(model)
     print(f"Run {run_id} saved to {args.database}")
     print_report(connection, run_id)
 

@@ -19,7 +19,7 @@ from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel, ConfigDict, Field
 
-MODEL = "llama3.1:8b"
+MODEL = "granite4.2:8b"
 # Source CV + job description + full JSON reply exceeds Ollama's default window.
 CONTEXT_TOKENS = 16384
 # Models that answer with an empty string when reasoning is switched off.
@@ -394,13 +394,14 @@ def tailor_cv(
             "\n\nYour previous summary mentioned terms the evidence does not "
             f"support: {', '.join(unsupported)}. Rewrite it without them."
         )
-    print(
-        "Warning: kept the source summary; the model's tailored summary was not "
-        "supported by the CV.",
-        file=sys.stderr,
-    )
     if diagnostics is not None:
         diagnostics.summary_fallback = True
+    else:
+        print(
+            "Warning: kept the source summary; the model's tailored summary was "
+            "not supported by the CV.",
+            file=sys.stderr,
+        )
     return tailored
 
 

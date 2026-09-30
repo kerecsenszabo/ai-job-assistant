@@ -3,7 +3,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from assistant.vector_store import search
 
-MODEL = "llama3.1:8b"
+MODEL = "granite4.2:8b"
 
 RAG_PROMPT = ChatPromptTemplate.from_messages(
     [
