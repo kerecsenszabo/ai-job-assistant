@@ -1,4 +1,4 @@
-"""CLI chat with your CV — RAG pipeline with semantic retrieval, Phase 2."""
+"""CLI chat with your CV — optional RAG workflow with semantic retrieval, Phase 4."""
 
 from rich.console import Console
 from rich.panel import Panel
@@ -12,7 +12,7 @@ console = Console()
 def main() -> None:
     console.print(
         Panel.fit(
-            "[bold cyan]AI Job Assistant[/bold cyan] — CV Chat (Phase 2 - RAG)\n"
+            "[bold cyan]AI Job Assistant[/bold cyan] — CV Chat (Phase 4 - RAG)\n"
             "Type [yellow]exit[/yellow] or [yellow]quit[/yellow] to stop.",
             border_style="cyan",
         )

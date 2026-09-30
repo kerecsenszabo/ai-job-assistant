@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from langchain_core.runnables import RunnableLambda
 
 from assistant import cv_generator
 from assistant.cv_generator import CV, escape_latex, to_latex
@@ -32,6 +33,7 @@ def test_latex_preserves_sections_and_escapes_text():
         ],
     )
     latex = to_latex(cv)
+    assert r"\documentclass[11pt,a4paper]{article}" in latex
     assert r"Example \& Co" in latex
     assert r"10\%" in latex
     for title in ("Skills", "Experience", "Languages", "Education", "Publications", "Certifications"):
@@ -44,6 +46,32 @@ def test_languages_are_optional_for_existing_source_cvs():
     cv = CV(name="Example")
     assert cv.languages == []
     assert r"\section*{Languages}" not in to_latex(cv)
+
+
+def test_latex_renders_anonymous_project_bullets_under_employer_heading():
+    cv = CV(name="Example", experience=[{
+        "company": "EPAM", "role": "Engineer", "dates": "2023 - 2025",
+        "bullets": [
+            "Delivered solutions for multiple clients.",
+            "Developed recommender models over two years.",
+            "Deployed services with Docker.",
+            "Supported production services.",
+            "Built data pipelines during a six-month project.",
+            "Tuned Spark workloads.",
+        ],
+    }])
+    original = cv.model_dump_json()
+
+    latex = to_latex(cv)
+
+    assert r"\textbf{Engineer} -- EPAM" in latex
+    assert r"\textit{" not in latex
+    assert r"\item Developed recommender models over two years." in latex
+    assert r"\item Deployed services with Docker." in latex
+    assert r"\item Supported production services." in latex
+    assert r"\item Delivered solutions for multiple clients." in latex
+    assert latex.count(r"\begin{itemize}") == latex.count(r"\end{itemize}") == 1
+    assert cv.model_dump_json() == original
 
 
 def test_cli_writes_separate_report_not_match_score_in_cv(tmp_path, monkeypatch, capsys):
@@ -106,6 +134,67 @@ def test_cli_general_cv_also_writes_rewrite_audit(tmp_path, monkeypatch):
     cv_generator.main()
     assert output.with_suffix(".report.json").exists()
     assert not cache_dir.exists()
+
+
+def test_cli_exports_rewritten_experience_for_every_role(tmp_path, monkeypatch):
+    cv = CV(
+        name="Example", summary="I build pipelines.", skills=["Python", "SQL"],
+        experience=[
+            {
+                "company": "Current Co", "role": "Engineer", "dates": "2024",
+                "bullets": ["Built Python pipelines.", "Maintained SQL reports."],
+            },
+            {
+                "company": "Previous Co", "role": "Developer", "dates": "2023",
+                "bullets": ["Client A: Supported a prototype."],
+            },
+        ],
+    )
+    rewritten = {
+        "experience/0/bullets/0": "Developed Python pipelines.",
+        "experience/0/bullets/1": "Updated SQL reports.",
+        "experience/1/bullets/0": "Client A: provided support for a prototype.",
+    }
+    responses = iter([
+        {
+            "bullets": {
+                sid: {"source_ids": [sid], "text": text}
+                for sid, text in rewritten.items()
+            },
+            "summary_sentences": [],
+        },
+        {"verdicts": {
+            sid: {"status": "supported", "reason": "Preserves the original facts."}
+            for sid in rewritten
+        }},
+    ])
+    llm = RunnableLambda(lambda prompt, **kwargs: json.dumps(next(responses)))
+    source = tmp_path / "source.json"
+    source.write_text(cv.model_dump_json())
+    output = tmp_path / "cv.pdf"
+    monkeypatch.setattr(cv_generator, "local_llm", lambda model: llm)
+    monkeypatch.setattr(cv_generator, "write_pdf", lambda latex, path: path.write_text(latex))
+    monkeypatch.setattr(sys, "argv", [
+        "cv_generator", "--cv", str(source), "--output", str(output),
+    ])
+
+    cv_generator.main()
+
+    exported = CV.model_validate_json(output.with_suffix(".json").read_text())
+    assert [role.bullets for role in exported.experience] == [
+        list(rewritten.values())[:2], list(rewritten.values())[2:],
+    ]
+    for text in rewritten.values():
+        assert text in output.read_text()
+    assert exported.model_dump(exclude={"experience"}) == cv.model_dump(exclude={"experience"})
+    assert [role.model_dump(exclude={"bullets"}) for role in exported.experience] == [
+        role.model_dump(exclude={"bullets"}) for role in cv.experience
+    ]
+    assert source.read_text() == cv.model_dump_json()
+    report = TailoringReport.model_validate_json(output.with_suffix(".report.json").read_text())
+    assert len(report.rewrites) == 3
+    assert all(item.status == "accepted" and item.exported != item.original
+               for item in report.rewrites)
 
 
 @pytest.mark.parametrize("refresh", [False, True])

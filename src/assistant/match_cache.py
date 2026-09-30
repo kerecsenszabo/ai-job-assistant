@@ -53,6 +53,10 @@ def get_cached_matches(
         checked_matches, enforce_match_rules, match_job,
     )
 
+    if missing := next((item.id for item in job.requirements if not item.criteria), None):
+        raise ValueError(
+            f"{missing} has no criteria; reparse the job with --refresh-job-analysis."
+        )
     if cache_dir is not None and (
         model_identity is None or not model_identity.strip()
     ):

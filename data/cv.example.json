@@ -40,10 +40,10 @@
       "role": "Machine Learning Engineer",
       "dates": "February 2021 - December 2023",
       "bullets": [
-        "A summary bullet naming the clients or projects covered by the bullets that follow.",
-        "Client A (2 years): What you delivered, with the technologies used. Name the client once; consecutive bullets about the same client are grouped automatically when the CV is generated.",
-        "Client A: A further responsibility on the same project, such as production support or benchmarking.",
-        "Client B (6 months): A different type of work, such as a data migration or a prototype."
+        "A summary of the client work or projects covered below, without naming client companies.",
+        "What you delivered during a two-year project, with the technologies used, without naming the client.",
+        "A further responsibility on the same project, such as production support or benchmarking.",
+        "A different type of work during a six-month project, such as a data migration or a prototype."
       ]
     },
     {

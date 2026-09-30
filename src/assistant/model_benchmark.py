@@ -21,7 +21,6 @@ MODEL_SUITE = (
     ("qwen3.5:0.8b", "1.0 GB", "basic"),
     ("granite4.2:3b", "2.2 GB", "basic"),
     ("granite4.2:8b", "5.3 GB", "balanced"),
-    ("lfm2.5:8b", "5.2 GB", "balanced"),
     ("gemma4:12b", "8.0 GB", "advanced"),
     ("gemma4:26b-a4b", "18 GB", "advanced"),
 )
@@ -65,6 +64,10 @@ class BenchmarkResult:
     rejected_rewrites: int | None = None
     unclear_rewrites: int | None = None
     report_json: str | None = None
+    model_calls: int | None = None
+    matching_seconds: float | None = None
+    rewriting_seconds: float | None = None
+    matching_cached: bool | None = None
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -107,6 +110,10 @@ def connect(path: Path) -> sqlite3.Connection:
             rejected_rewrites INTEGER,
             unclear_rewrites INTEGER,
             report_json TEXT,
+            model_calls INTEGER,
+            matching_seconds REAL,
+            rewriting_seconds REAL,
+            matching_cached INTEGER,
             PRIMARY KEY (run_id, model, job, repetition),
             FOREIGN KEY (run_id) REFERENCES benchmark_runs(run_id)
         )
@@ -124,6 +131,10 @@ def connect(path: Path) -> sqlite3.Connection:
         ("rejected_rewrites", "INTEGER"),
         ("unclear_rewrites", "INTEGER"),
         ("report_json", "TEXT"),
+        ("model_calls", "INTEGER"),
+        ("matching_seconds", "REAL"),
+        ("rewriting_seconds", "REAL"),
+        ("matching_cached", "INTEGER"),
     ):
         if column not in existing:
             connection.execute(
@@ -247,6 +258,10 @@ def report_metrics(diagnostics: TailorDiagnostics) -> dict:
         "rejected_rewrites": sum(item.status == "rejected" for item in report.rewrites),
         "unclear_rewrites": sum(item.status == "unclear" for item in report.rewrites),
         "report_json": report.model_dump_json(),
+        "model_calls": report.performance.total_model_calls,
+        "matching_seconds": report.performance.stage_seconds.get("matching", 0.0),
+        "rewriting_seconds": report.performance.stage_seconds.get("rewriting", 0.0),
+        "matching_cached": report.matching_analysis_cached,
     }
 
 
@@ -259,8 +274,9 @@ def save_result(connection: sqlite3.Connection, result: BenchmarkResult) -> None
             selection_seconds, summary_seconds, summary_attempts,
             summary_fallback, keyword_recall, selection_recall, summary_words,
             selected_items, output_json, error, match_percent, must_have_percent,
-            accepted_rewrites, rejected_rewrites, unclear_rewrites, report_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            accepted_rewrites, rejected_rewrites, unclear_rewrites, report_json,
+            model_calls, matching_seconds, rewriting_seconds, matching_cached
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             result.run_id,
@@ -285,6 +301,10 @@ def save_result(connection: sqlite3.Connection, result: BenchmarkResult) -> None
             result.rejected_rewrites,
             result.unclear_rewrites,
             result.report_json,
+            result.model_calls,
+            result.matching_seconds,
+            result.rewriting_seconds,
+            result.matching_cached,
         ),
     )
     connection.commit()
@@ -402,7 +422,9 @@ def run_benchmark(args: argparse.Namespace) -> None:
                     print(
                         f"  {result.total_seconds:.1f}s, "
                         f"keyword proxy {result.keyword_recall:.1%}, "
-                        f"{result.diagnostics.summary_attempts} summary attempt(s)"
+                        f"{result.model_calls} model call(s), "
+                        f"{result.matching_seconds:.1f}s matching, "
+                        f"{result.rewriting_seconds:.1f}s rewriting"
                         + (", source summary kept" if result.diagnostics.summary_fallback else "")
                     )
                 else:
@@ -436,7 +458,11 @@ def print_report(connection: sqlite3.Connection, run_id: str | None = None) -> N
                SUM(CASE WHEN status = 'ok' THEN accepted_rewrites END) AS accepted,
                SUM(CASE WHEN status = 'ok' THEN rejected_rewrites END) AS rejected,
                SUM(CASE WHEN status = 'ok' THEN unclear_rewrites END) AS unclear,
-               SUM(status = 'ok' AND report_json IS NOT NULL) AS reports
+               SUM(status = 'ok' AND report_json IS NOT NULL) AS reports,
+               AVG(CASE WHEN status = 'ok' THEN model_calls END) AS model_calls,
+               AVG(CASE WHEN status = 'ok' THEN matching_seconds END) AS matching_seconds,
+               AVG(CASE WHEN status = 'ok' THEN rewriting_seconds END) AS rewriting_seconds,
+               SUM(CASE WHEN status = 'ok' THEN matching_cached END) AS cached_matches
         FROM benchmark_results
         WHERE run_id = ?
         GROUP BY model
@@ -452,12 +478,14 @@ def print_report(connection: sqlite3.Connection, run_id: str | None = None) -> N
     print(f"\nBenchmark run: {run_id}")
     print(
         "model                         pass      avg s  kw proxy    vs job  words  "
-        "diversity  fallback  attempts   match  must-have  rewrites A/R/U  reports"
+        "diversity  fallback  attempts   match  must-have  rewrites A/R/U  reports  "
+        "calls  match s  rewrite s  cached"
     )
-    print("-" * 159)
+    print("-" * 200)
     for (
         model, cases, successes, seconds, recall, words, fallbacks, attempts,
         match, must_have, accepted, rejected, unclear, reports,
+        calls, matching, rewriting, cached,
     ) in rows:
         duration = f"{seconds:.1f}" if seconds is not None else "-"
         recall_text = f"{recall:.1%}" if recall is not None else "-"
@@ -473,11 +501,16 @@ def print_report(connection: sqlite3.Connection, run_id: str | None = None) -> N
         rewrite_text = (
             f"{accepted}/{rejected}/{unclear}" if accepted is not None else "-"
         )
+        calls_text = f"{calls:.1f}" if calls is not None else "-"
+        matching_text = f"{matching:.1f}" if matching is not None else "-"
+        rewriting_text = f"{rewriting:.1f}" if rewriting is not None else "-"
+        cached_text = str(cached) if cached is not None else "-"
         print(
             f"{model:<29} {successes:>2}/{cases:<2} {duration:>10} "
             f"{recall_text:>8} {edge_text:>9} {words_text:>6} {diversity_text:>10} "
             f"{fallbacks:>9} {attempts_text:>9} {match_text:>7} {must_have_text:>10} "
-            f"{rewrite_text:>15} {reports:>3}/{successes}"
+            f"{rewrite_text:>15} {reports:>3}/{successes} {calls_text:>6} "
+            f"{matching_text:>8} {rewriting_text:>10} {cached_text:>7}"
         )
     print(
         "\nkw proxy = job-term overlap in exported list items (summary excluded).\n"
@@ -488,6 +521,8 @@ def print_report(connection: sqlite3.Connection, run_id: str | None = None) -> N
         "model quality; averages exclude missing values, shown as '-'.\n"
         "rewrites A/R/U = accepted/rejected/unclear automated verdict totals;\n"
         "approved rewrites are not proof of faithfulness. reports = audited/pass.\n"
+        "calls/match s/rewrite s = average local model calls and stage time;\n"
+        "cached = results reusing completed matching (a cold benchmark has 0).\n"
         "Full evidence, requirement matches and rewrite audits are in report_json."
     )
 

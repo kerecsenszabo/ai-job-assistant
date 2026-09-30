@@ -19,7 +19,6 @@ from assistant.cv_tailoring import (
     enforce_match_rules,
     explicit_criterion_match,
     match_job,
-    request_matches,
     mechanical_rejection,
     parse_job,
     polish_with_report,
@@ -27,7 +26,6 @@ from assistant.cv_tailoring import (
     select_evidence,
     source_evidence,
     tailor_with_report,
-    unkey_matches,
     unkey_semantic_decisions,
 )
 
@@ -83,11 +81,17 @@ def requirements():
     return [
         Requirement(
             id="requirement/0", text="Python", quote="Python",
-            importance="required",
+            importance="required", criteria=[RequirementCriterion(
+                id="requirement/0/criterion/0", text="Python", quote="Python",
+                kind="technology", options=["Python"],
+            )],
         ),
         Requirement(
             id="requirement/1", text="Kubernetes", quote="Kubernetes",
-            importance="preferred",
+            importance="preferred", criteria=[RequirementCriterion(
+                id="requirement/1/criterion/0", text="Kubernetes", quote="Kubernetes",
+                kind="technology", options=["Kubernetes"],
+            )],
         ),
     ]
 
@@ -98,38 +102,62 @@ def matches():
             requirement_id="requirement/0", status="direct",
             evidence_ids=["skills/0", "experience/0/bullets/1"],
             explanation="Python pipelines explicitly described.",
+            criteria_matches=[CriterionMatch(
+                criterion_id="requirement/0/criterion/0", status="direct",
+                evidence_ids=["skills/0", "experience/0/bullets/1"],
+                explanation="Python explicitly described.",
+            )],
         ),
         RequirementMatch(
             requirement_id="requirement/1", status="not_evidenced",
             evidence_ids=[], explanation="Not evidenced in this CV.",
+            criteria_matches=[CriterionMatch(
+                criterion_id="requirement/1/criterion/0", status="not_evidenced",
+                evidence_ids=[], explanation="Not evidenced in this CV.",
+            )],
         ),
     ]
 
 
 def draft(bullet="Developed Python ETL pipelines.", summary="I build Python ETL pipelines."):
-    return {"sentences": [
-        {"id": "b0", "target_id": "experience/0/bullets/1",
-         "source_ids": ["experience/0/bullets/1"], "text": bullet},
-        {"id": "b1", "target_id": "experience/1/bullets/0",
-         "source_ids": ["experience/1/bullets/0"],
-         "text": "Supported an internal prototype."},
-        {"id": "s0", "target_id": "summary",
-         "source_ids": ["experience/0/bullets/1"], "text": summary},
-    ]}
+    return {
+        "bullets": {
+            "experience/0/bullets/0": {
+                "source_ids": ["experience/0/bullets/0"],
+                "text": "Maintained reports.",
+            },
+            "experience/0/bullets/1": {
+                "source_ids": ["experience/0/bullets/1"], "text": bullet,
+            },
+            "experience/1/bullets/0": {
+                "source_ids": ["experience/1/bullets/0"],
+                "text": "Supported an internal prototype.",
+            },
+            "experience/1/bullets/1": {
+                "source_ids": ["experience/1/bullets/1"],
+                "text": "Wrote SQL reports.",
+            },
+        },
+        "summary_sentences": [{
+            "id": "summary/0", "source_ids": ["experience/0/bullets/1"],
+            "text": summary,
+        }],
+    }
 
 
 def review(bullet_status="supported", summary_status="supported"):
-    return {"verdicts": [
-        {"id": "b0", "status": bullet_status, "reason": "Evidence review."},
-        {"id": "b1", "status": "supported", "reason": "Unchanged source."},
-        {"id": "s0", "status": summary_status, "reason": "Evidence review."},
-    ]}
+    return {"verdicts": {
+        "experience/0/bullets/1": {
+            "status": bullet_status, "reason": "Evidence review.",
+        },
+        "summary/0": {"status": summary_status, "reason": "Evidence review."},
+    }}
 
 
 def pipeline_responses(proposal=None, verdict=None):
     job = {"requirements": [item.model_dump() for item in requirements()]}
-    mapping = {"matches": [item.model_dump() for item in matches()]}
-    return [job, mapping, mapping, proposal or draft(), verdict or review()]
+    return [job, proposal if proposal is not None else draft(),
+            verdict if verdict is not None else review()]
 
 
 def test_evidence_paths_cover_all_sections_and_preserve_source(cv):
@@ -154,12 +182,17 @@ def test_pipeline_rewrites_supported_facts_and_keeps_source_immutable(cv):
     )
     assert result.skills == ["Python"]
     assert result.ai_native == []
-    assert result.experience[0].bullets == ["Developed Python ETL pipelines."]
-    assert result.experience[1].bullets == ["Supported an internal prototype."]
+    assert result.experience[0].bullets == [
+        "Maintained reports.", "Developed Python ETL pipelines.",
+    ]
+    assert result.experience[1].bullets == cv.experience[1].bullets
     assert result.summary == "I build Python ETL pipelines."
     assert report.match_percent == 75
     assert report.must_have_percent == 100
-    assert report.contextual_evidence_ids == ["experience/1/bullets/0"]
+    assert report.contextual_evidence_ids == [
+        "experience/0/bullets/0",
+        "experience/1/bullets/0", "experience/1/bullets/1",
+    ]
     assert all(item.status == "accepted" for item in report.rewrites)
     assert diagnostics.report is report
     assert diagnostics.summary_attempts == 1
@@ -169,15 +202,12 @@ def test_pipeline_rewrites_supported_facts_and_keeps_source_immutable(cv):
     assert [(r.company, r.role, r.dates) for r in result.experience] == [
         (r.company, r.role, r.dates) for r in cv.experience
     ]
-    assert len(calls) == 5
+    assert len(calls) == 3
     assert all("format" in kwargs for _, kwargs in calls)
-    match_schema = calls[1][1]["format"]["$defs"]["RequirementMatch"]["properties"]
-    assert match_schema["requirement_id"]["enum"] == [
-        "requirement/0", "requirement/1"
+    assert calls[1][1]["format"]["properties"]["bullets"]["required"] == [
+        "experience/0/bullets/0", "experience/0/bullets/1",
+        "experience/1/bullets/0", "experience/1/bullets/1",
     ]
-    assert set(match_schema["evidence_ids"]["items"]["enum"]) == {
-        item.id for item in report.evidence
-    }
 
 
 @pytest.mark.parametrize("bullet,status", [
@@ -192,7 +222,7 @@ def test_pipeline_rewrites_supported_facts_and_keeps_source_immutable(cv):
 def test_unsafe_or_uncertain_bullets_retain_original(cv, bullet, status):
     llm, _ = fake_llm(pipeline_responses(draft(bullet=bullet), review(status)))
     result, report = tailor_with_report(cv, "Python and Kubernetes", llm)
-    assert result.experience[0].bullets == ["Built Python ETL pipelines."]
+    assert result.experience[0].bullets == cv.experience[0].bullets
     audit = next(item for item in report.rewrites
                  if item.target_id == "experience/0/bullets/1")
     assert audit.status != "accepted"
@@ -203,15 +233,15 @@ def test_unsafe_or_uncertain_bullets_retain_original(cv, bullet, status):
 
 def test_whole_summary_falls_back_when_one_sentence_is_unsupported(cv):
     proposal = draft()
-    proposal["sentences"].append({
-        "id": "s1", "target_id": "summary",
+    proposal["summary_sentences"].append({
+        "id": "summary/1",
         "source_ids": ["experience/1/bullets/0"],
         "text": "I led production deployment.",
     })
     verdict = review()
-    verdict["verdicts"].append({
-        "id": "s1", "status": "unsupported", "reason": "Prototype, not production."
-    })
+    verdict["verdicts"]["summary/1"] = {
+        "status": "unsupported", "reason": "Prototype, not production.",
+    }
     llm, _ = fake_llm(pipeline_responses(proposal, verdict))
     diagnostics = TailorDiagnostics()
     result, report = tailor_with_report(cv, "Python and Kubernetes", llm, diagnostics)
@@ -225,22 +255,21 @@ def test_whole_summary_falls_back_when_one_sentence_is_unsupported(cv):
 @pytest.mark.parametrize("proposal", [
     "not json",
     {"sentences": []},
-    {"sentences": [
-        {"id": "b0", "target_id": "experience/0/bullets/1",
-         "source_ids": ["skills/2"], "text": "Built AWS pipelines."},
-    ]},
-    {"sentences": [
-        {"id": "s0", "target_id": "summary",
-         "source_ids": ["nonexistent"], "text": "I build pipelines."},
-    ]},
+    {"bullets": {"experience/0/bullets/1": {
+        "source_ids": ["skills/2"], "text": "Built AWS pipelines.",
+    }}},
+    {"bullets": {}, "summary_sentences": [{
+        "id": "summary/0", "source_ids": ["nonexistent"],
+        "text": "I build pipelines.",
+    }]},
 ])
 def test_invalid_draft_keeps_selected_originals_and_reports_failure(cv, proposal):
     responses = pipeline_responses()
-    responses[3] = proposal
-    llm, _ = fake_llm(responses[:4])
+    responses[1] = proposal
+    llm, _ = fake_llm(responses[:2])
     result, report = tailor_with_report(cv, "Python and Kubernetes", llm)
     assert result.summary == cv.summary
-    assert result.experience[0].bullets == ["Built Python ETL pipelines."]
+    assert result.experience[0].bullets == cv.experience[0].bullets
     assert report.rewrites
     assert all(item.status == "unclear" for item in report.rewrites)
     assert report.warnings
@@ -253,10 +282,10 @@ def test_invalid_draft_keeps_selected_originals_and_reports_failure(cv, proposal
 ])
 def test_invalid_review_blocks_changed_text_but_not_unchanged_originals(cv, verdict):
     responses = pipeline_responses()
-    responses[4] = verdict
+    responses[2] = verdict
     llm, _ = fake_llm(responses)
     result, report = tailor_with_report(cv, "Python and Kubernetes", llm)
-    assert result.experience[0].bullets == ["Built Python ETL pipelines."]
+    assert result.experience[0].bullets == cv.experience[0].bullets
     assert result.summary == cv.summary
     assert all(item.exported == item.original for item in report.rewrites)
     assert all(item.status == "unclear" for item in report.rewrites
@@ -268,7 +297,7 @@ def test_invalid_review_blocks_changed_text_but_not_unchanged_originals(cv, verd
 
 def test_transport_errors_propagate_instead_of_success_shaped_fallback(cv):
     responses = pipeline_responses()
-    responses[3] = ConnectionError("Ollama unavailable")
+    responses[1] = ConnectionError("Ollama unavailable")
     llm, _ = fake_llm(responses)
     diagnostics = TailorDiagnostics()
     with pytest.raises(ConnectionError, match="unavailable"):
@@ -291,12 +320,17 @@ def test_sparse_cv_and_unresolved_eligibility():
     job = {"requirements": [{
         "id": "r", "text": "Work authorization", "quote": "Work authorization",
         "importance": "eligibility",
+        "criteria": [{
+            "id": "c", "text": "Work authorization", "quote": "Work authorization",
+        }],
     }]}
-    mapping = {"matches": [{
-        "requirement_id": "requirement/0", "status": "not_evidenced",
-        "evidence_ids": [], "explanation": "Not evidenced in the CV.",
-    }]}
-    llm, _ = fake_llm([job, mapping, mapping, {"sentences": []}, {"verdicts": []}])
+    decision = {"decisions": {"c0": {
+        "status": "not_evidenced", "evidence_ids": [],
+        "explanation": "Not evidenced in the CV.",
+    }}}
+    llm, _ = fake_llm([job, decision, decision, {
+        "bullets": {}, "summary_sentences": [],
+    }])
     result, report = tailor_with_report(cv, "Work authorization required.", llm)
     assert result.experience == []
     assert report.match_percent == 0
@@ -320,6 +354,11 @@ def test_requirement_quotes_allow_wrapped_hyphenated_names():
         "id": "r", "text": "scikit-learn in production",
         "quote": "Experience with scikit-learn in production.",
         "importance": "required",
+        "criteria": [{
+            "id": "c", "text": "scikit-learn in production",
+            "quote": "Experience with scikit-learn in production.",
+            "kind": "technology", "options": ["scikit-learn"],
+        }],
     }]}])
     job = parse_job(llm, "Experience with scikit-\nlearn in production.")
     assert job.requirements[0].text == "scikit-learn in production"
@@ -354,35 +393,25 @@ def test_negative_match_citations_are_inspected_not_supporting_evidence(cv):
     assert mapping[1].evidence_ids == ["skills/0"]
 
 
-def test_invalid_matching_response_is_retried_with_feedback(cv):
-    responses = pipeline_responses()
-    invalid = {"matches": [item.model_dump() for item in matches()]}
-    invalid["matches"][0]["evidence_ids"] = ["invented"]
-    llm, calls = fake_llm([responses[0], invalid, *responses[1:]])
-    _, report = tailor_with_report(cv, "Python and Kubernetes", llm)
-    assert report.match_percent == 75
-    assert len(calls) == 6
-    assert "previous response was invalid" in calls[2][0].to_string()
+def test_parsed_requirements_without_criteria_cannot_use_old_matching(cv):
+    job = {"requirements": [{
+        "id": "r", "text": "Python", "quote": "Python", "importance": "required",
+        "criteria": [],
+    }]}
+    llm, calls = fake_llm([job])
+    with pytest.raises(ValueError, match="no assessable criteria"):
+        tailor_with_report(cv, "Python", llm)
+    assert len(calls) == 1
 
 
-def test_repeated_invalid_matching_cannot_export(cv):
-    responses = pipeline_responses()
-    invalid = {"matches": []}
-    llm, _ = fake_llm([responses[0], invalid, invalid])
-    with pytest.raises(ValueError, match="every requirement"):
-        tailor_with_report(cv, "Python and Kubernetes", llm)
-
-
-def test_match_review_downgrade_changes_score_before_rewriting(cv):
-    responses = pipeline_responses()
-    responses[2]["matches"] = [
-        item.model_dump() for item in matches()
-    ]
-    responses[2]["matches"][0]["status"] = "partial"
-    llm, _ = fake_llm(responses)
-    _, report = tailor_with_report(cv, "Python and Kubernetes", llm)
-    assert report.match_percent == 37.5
-    assert report.must_have_percent == 50
+def test_old_cached_job_without_criteria_cannot_bypass_current_matching(cv):
+    job = ParsedJob(requirements=[Requirement(
+        id="r", text="Python", quote="Python", importance="required",
+    )])
+    llm, calls = fake_llm([])
+    with pytest.raises(ValueError, match="--refresh-job-analysis"):
+        match_job(llm, job, source_evidence(cv))
+    assert calls == []
 
 
 def test_scoring_is_configurable_and_handles_uncertainty():
@@ -408,8 +437,10 @@ def test_client_context_is_retained_when_anchor_is_not_relevant():
         evidence=source_evidence(cv), requirements=requirements()[:1], matches=mapping
     )
     selected = select_evidence(report)
-    assert [item.text for item in selected] == cv.experience[0].bullets[:2]
-    assert report.contextual_evidence_ids == ["experience/0/bullets/0"]
+    assert [item.text for item in selected] == cv.experience[0].bullets
+    assert report.contextual_evidence_ids == [
+        "experience/0/bullets/0", "experience/0/bullets/2",
+    ]
     source = selected[0]
     proposal = DraftSentence(
         id="b", target_id=source.id, source_ids=[source.id], text="Built a prototype."
@@ -417,7 +448,7 @@ def test_client_context_is_retained_when_anchor_is_not_relevant():
     assert "prefix" in mechanical_rejection(proposal, [source])
 
 
-def test_selection_caps_without_topping_up_unrelated_items(cv):
+def test_selection_caps_skills_and_retains_role_context(cv):
     cv.skills = [f"Skill {index}" for index in range(20)]
     mapping = matches()
     mapping[0].evidence_ids = [f"skills/{index}" for index in range(20)]
@@ -425,23 +456,73 @@ def test_selection_caps_without_topping_up_unrelated_items(cv):
         evidence=source_evidence(cv), requirements=requirements(), matches=mapping
     )
     selected = select_evidence(report)
-    assert len([item for item in selected if item.section == "skills"]) == 10
-    assert len([item for item in selected if item.section == "experience"]) == 2
+    assert len([item for item in selected if item.section == "skills"]) == 14
+    assert len([item for item in selected if item.section == "experience"]) == 4
     assert not any(item.section == "ai_native" for item in selected)
+
+
+def test_selection_prioritizes_matches_then_preserves_context_within_role_budget():
+    cv = CV(name="Example", experience=[
+        Experience(
+            company="Current Co", role="Engineer", dates="2024",
+            bullets=[f"Delivered project {index}." for index in range(8)],
+        ),
+        Experience(
+            company="Previous Co", role="Engineer", dates="2020",
+            bullets=[f"Supported product {index}." for index in range(4)],
+        ),
+    ])
+    mapping = matches()[:1]
+    mapping[0].evidence_ids = [
+        "experience/0/bullets/6", "experience/0/bullets/7",
+    ]
+    report = TailoringReport(
+        evidence=source_evidence(cv), requirements=requirements()[:1], matches=mapping,
+    )
+    score = score_matches(report.requirements, report.matches, report.rubric)
+
+    selected = select_evidence(report)
+
+    assert [item.bullet_index for item in selected if item.role_index == 0] == [
+        0, 1, 2, 3, 6, 7,
+    ]
+    assert [item.bullet_index for item in selected if item.role_index == 1] == [0, 1]
+    assert report.contextual_evidence_ids == [
+        *(f"experience/0/bullets/{index}" for index in range(4)),
+        "experience/1/bullets/0", "experience/1/bullets/1",
+    ]
+    assert report.selected_evidence_ids == [item.id for item in selected]
+    assert select_evidence(report) == selected
+    assert len(report.contextual_evidence_ids) == 6
+    assert score_matches(report.requirements, report.matches, report.rubric) == score
+
+
+def test_six_relevant_bullets_survive_instead_of_being_cut_to_four():
+    cv = CV(name="Example", experience=[Experience(
+        company="Current Co", role="Engineer", dates="2024",
+        bullets=[f"Delivered Python project {index}." for index in range(8)],
+    )])
+    mapping = matches()[:1]
+    mapping[0].evidence_ids = [
+        f"experience/0/bullets/{index}" for index in range(8)
+    ]
+    report = TailoringReport(
+        evidence=source_evidence(cv), requirements=requirements()[:1], matches=mapping,
+    )
+    assert [item.text for item in select_evidence(report)] == cv.experience[0].bullets[:6]
+    assert report.contextual_evidence_ids == []
 
 
 def test_general_polish_preserves_structure_and_rejects_invention(cv):
     selected = [item for item in source_evidence(cv) if item.section == "experience"]
-    proposal = {"sentences": [
-        {"id": str(index), "target_id": item.id, "source_ids": [item.id],
-         "text": "Led a production team." if index == 0 else item.text}
+    proposal = {"bullets": {
+        item.id: {"source_ids": [item.id],
+                  "text": "Led a production team." if index == 0 else item.text}
         for index, item in enumerate(selected)
-    ]}
-    verdict = {"verdicts": [
-        {"id": str(index), "status": "unsupported" if index == 0 else "supported",
-         "reason": "Evidence review."}
-        for index in range(len(selected))
-    ]}
+    }, "summary_sentences": []}
+    verdict = {"verdicts": {
+        selected[0].id: {"status": "unsupported", "reason": "Evidence review."},
+    }}
     llm, _ = fake_llm([proposal, verdict])
     result, report = polish_with_report(cv, llm)
     assert result == cv
@@ -620,7 +701,13 @@ def test_source_required_section_overrides_preferred_english_classification():
 
 def test_preferred_section_remains_preferred():
     text = "Docker experience"
-    requirement = Requirement(id="r", text=text, quote=text, importance="required")
+    requirement = Requirement(
+        id="r", text=text, quote=text, importance="required",
+        criteria=[RequirementCriterion(
+            id="c", text=text, quote=text, kind="technology",
+            options=["Docker"],
+        )],
+    )
     llm, _ = fake_llm([{"requirements": [requirement.model_dump()]}])
     parsed = parse_job(llm, f"Nice to have\n• {text}").requirements[0]
     assert parsed.importance == "preferred"
@@ -750,36 +837,6 @@ def test_matching_requires_every_criterion(cv):
     proposed.criteria_matches = []
     with pytest.raises(ValueError, match="every criterion"):
         checked_matches(Matches(matches=[proposed]), [requirement], source_evidence(cv))
-
-
-def test_keyed_grammar_requires_every_requirement_and_criterion(cv):
-    requirement = framework_requirement()
-    proposed = criterion_match(requirement, "partial", ["skills/0"])
-    payload = proposed.model_dump()
-    payload["criteria_matches"] = {
-        decision["criterion_id"]: decision for decision in payload["criteria_matches"]
-    }
-    keyed = {"matches": {requirement.id: payload}}
-    llm, calls = fake_llm([keyed])
-    reviewed = enforce_match_rules(
-        [requirement],
-        request_matches(llm, "Match.", {}, ParsedJob(requirements=[requirement]),
-                        source_evidence(cv)),
-        source_evidence(cv),
-    )
-    assert reviewed[0].status == "not_evidenced"
-    schema = calls[0][1]["format"]["properties"]["matches"]
-    assert schema["required"] == [requirement.id]
-    criteria_schema = schema["properties"][requirement.id]["properties"]["criteria_matches"]
-    assert criteria_schema["required"] == [requirement.criteria[0].id]
-
-
-def test_keyed_response_cannot_swap_requirement_ids():
-    payload = {"matches": {"requirement/0": {
-        "requirement_id": "requirement/1", "criteria_matches": {},
-    }}}
-    with pytest.raises(ValueError, match="inconsistent ID"):
-        unkey_matches(json.dumps(payload))
 
 
 def test_unresolved_semantic_criteria_use_compact_batches(cv):

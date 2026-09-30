@@ -10,11 +10,13 @@ import pytest
 from assistant import model_benchmark as benchmark
 from assistant.cv_generator import CV, TailorDiagnostics
 from assistant.cv_tailoring import EvidenceItem, RequirementMatch, RewriteAudit, TailoringReport
+from assistant.performance import RunPerformance
 
 
 REPORT_COLUMNS = (
     "match_percent", "must_have_percent", "accepted_rewrites",
     "rejected_rewrites", "unclear_rewrites", "report_json",
+    "model_calls", "matching_seconds", "rewriting_seconds", "matching_cached",
 )
 
 
@@ -39,6 +41,10 @@ def report():
     return TailoringReport(
         match_percent=62.5,
         must_have_percent=50,
+        performance=RunPerformance(
+            total_model_calls=4,
+            stage_seconds={"matching": 21.0, "rewriting": 12.5},
+        ),
         selected_evidence_ids=["skills/0"],
         evidence=[EvidenceItem(id="skills/0", text="Python", section="skills")],
         matches=[
@@ -131,7 +137,7 @@ def test_connect_migrates_old_schema_without_losing_records(workspace, cv, inter
                 + " FROM benchmark_results"
             ).fetchone()
             assert row == (0.4, 0.25 if intermediate else None,
-                           2 if intermediate else None, *([None] * 6))
+                           2 if intermediate else None, *([None] * len(REPORT_COLUMNS)))
             assert connection.execute("SELECT COUNT(*) FROM benchmark_runs").fetchone() == (1,)
 
 
@@ -147,10 +153,11 @@ def test_save_result_persists_all_metrics_and_full_report(workspace, cv, report)
             + ", ".join(REPORT_COLUMNS) + " FROM benchmark_results"
         ).fetchone()
     assert row[:-1] == (1, 2, 2, 1, 0.75, 0.5, 2, 1, cv.model_dump_json(),
-                       62.5, 50, 2, 1, 1)
-    assert json.loads(row[-1]) == report.model_dump(mode="json")
-    assert json.loads(row[-1])["matches"][0]["evidence_ids"] == ["skills/0"]
-    assert json.loads(row[-1])["rewrites"][2]["exported"] == "Python"
+                       62.5, 50, 2, 1, 1, report.model_dump_json(), 4, 21, 12.5)
+    assert row[-1] == 0
+    assert json.loads(row[-5]) == report.model_dump(mode="json")
+    assert json.loads(row[-5])["matches"][0]["evidence_ids"] == ["skills/0"]
+    assert json.loads(row[-5])["rewrites"][2]["exported"] == "Python"
 
 
 def test_save_result_without_report_keeps_metrics_null(workspace, cv):
@@ -163,7 +170,7 @@ def test_save_result_without_report_keeps_metrics_null(workspace, cv):
             "SELECT " + ", ".join(REPORT_COLUMNS)
             + " FROM benchmark_results ORDER BY repetition"
         ).fetchall()
-    assert rows == [tuple([None] * 6), tuple([None] * 6)]
+    assert rows == [tuple([None] * len(REPORT_COLUMNS))] * 2
 
 
 @pytest.mark.parametrize("with_report", [False, True])
@@ -196,6 +203,10 @@ def test_benchmark_one_collects_report_and_keyword_proxies(
     assert measured.rejected_rewrites == (1 if with_report else None)
     assert measured.unclear_rewrites == (1 if with_report else None)
     assert measured.report_json == (report.model_dump_json() if with_report else None)
+    assert measured.model_calls == (4 if with_report else None)
+    assert measured.matching_seconds == (21 if with_report else None)
+    assert measured.rewriting_seconds == (12.5 if with_report else None)
+    assert measured.matching_cached == (False if with_report else None)
 
 
 def test_empty_report_distinguishes_zero_verdicts_from_missing_report():
@@ -207,6 +218,10 @@ def test_empty_report_distinguishes_zero_verdicts_from_missing_report():
     assert metrics["accepted_rewrites"] == 0
     assert metrics["rejected_rewrites"] == 0
     assert metrics["unclear_rewrites"] == 0
+    assert metrics["model_calls"] == 0
+    assert metrics["matching_seconds"] == 0
+    assert metrics["rewriting_seconds"] == 0
+    assert metrics["matching_cached"] is False
     assert benchmark.report_metrics(TailorDiagnostics()) == {}
 
 
@@ -252,14 +267,15 @@ def test_report_handles_old_records_and_retains_relative_keyword_comparison(
         benchmark.print_report(connection)
         old_output = capsys.readouterr().out
         legacy_line = next(line for line in old_output.splitlines() if line.startswith("legacy"))
-        assert legacy_line.split()[-4:] == ["-", "-", "-", "0/1"]
+        assert legacy_line.split()[-8:] == ["-", "-", "-", "0/1", "-", "-", "-", "-"]
         assert "25.0%" in legacy_line
         measured = result(cv, **benchmark.report_metrics(TailorDiagnostics(report=report)))
         benchmark.save_result(connection, measured)
         benchmark.save_result(connection, replace(
             measured, repetition=2, match_percent=None, must_have_percent=None,
             accepted_rewrites=None, rejected_rewrites=None, unclear_rewrites=None,
-            report_json=None,
+            report_json=None, model_calls=None, matching_seconds=None,
+            rewriting_seconds=None, matching_cached=None,
         ))
         relative = benchmark.relative_selection_recall(connection, "run")
         assert relative["legacy"] == pytest.approx(-16.6666667)
@@ -268,7 +284,9 @@ def test_report_handles_old_records_and_retains_relative_keyword_comparison(
     output = capsys.readouterr().out
     model_line = next(line for line in output.splitlines()
                       if line.startswith("model ") and "avg s" not in line)
-    assert model_line.split()[-4:] == ["62.5%", "50.0%", "2/1/1", "1/2"]
+    assert model_line.split()[-8:] == [
+        "62.5%", "50.0%", "2/1/1", "1/2", "4.0", "21.0", "12.5", "0",
+    ]
     assert "source-evidence coverage" in output
     assert "not match metrics or proof of faithfulness" in output
     assert "approved rewrites are not proof" in output

@@ -17,12 +17,22 @@ def inputs(tmp_path, monkeypatch):
     cv = CV(name="Private Candidate", email="private@example.com", skills=["Python"])
     evidence = [EvidenceItem(id="skills/0", section="skills", text="Python")]
     job = ParsedJob(requirements=[
-        Requirement(id="requirement/0", text="Python", quote="Python", importance="required")
+        Requirement(
+            id="requirement/0", text="Python", quote="Python", importance="required",
+            criteria=[RequirementCriterion(
+                id="criterion/0", text="Python", quote="Python",
+                kind="technology", options=["Python"],
+            )],
+        )
     ])
     matcher = Mock(return_value=[
         RequirementMatch(
             requirement_id="requirement/0", status="direct",
             evidence_ids=["skills/0"], explanation="Supported by the cited skill.",
+            criteria_matches=[CriterionMatch(
+                criterion_id="criterion/0", status="direct",
+                evidence_ids=["skills/0"], explanation="Python listed in source.",
+            )],
         )
     ])
     monkeypatch.setattr(cv_tailoring, "match_job", matcher)
@@ -62,13 +72,11 @@ def test_full_inputs_invalidate_cache(inputs, monkeypatch, change):
     elif change == "criterion":
         args["job"] = args["job"].model_copy(deep=True)
         args["job"].requirements[0].criteria = [
-            RequirementCriterion(id="criterion/0", text="Python", quote="Python", kind="technology", options=["Python"])
+            RequirementCriterion(
+                id="criterion/0", text="Python", quote="Python",
+                kind="technology", options=["Python"], experience_required=True,
+            )
         ]
-        matcher.return_value[0] = matcher.return_value[0].model_copy(update={
-            "criteria_matches": [
-                CriterionMatch(criterion_id="criterion/0", status="direct", evidence_ids=["skills/0"], explanation="Python")
-            ]
-        })
     elif change == "evidence":
         args["evidence"] = [args["evidence"][0].model_copy(update={"context": "Changed"})]
     elif change == "model":
@@ -181,15 +189,24 @@ def test_empty_requirements_never_call_matcher(inputs):
     matcher.assert_not_called()
 
 
-def test_envelope_contains_no_source_content(inputs):
+def test_requirements_without_criteria_are_rejected_before_cache_lookup(inputs):
+    args, matcher = inputs
+    args["job"].requirements[0].criteria = []
+    with pytest.raises(ValueError, match="--refresh-job-analysis"):
+        get_cached_matches(**args)
+    matcher.assert_not_called()
+
+
+def test_envelope_contains_no_full_source_documents(inputs):
     args, _ = inputs
     _, fingerprint, _ = get_cached_matches(**args)
     contents = (args["cache_dir"] / f"{fingerprint}.json").read_text()
-    assert set(json.loads(contents)) == {"cache_version", "fingerprint", "matches"}
+    record = json.loads(contents)
+    assert set(record) == {"cache_version", "fingerprint", "matches"}
     assert args["cv"].name not in contents
     assert args["cv"].email not in contents
-    assert args["description"] not in contents
-    assert args["evidence"][0].text not in contents
+    assert "description" not in record
+    assert "evidence" not in record
 
 
 @pytest.mark.parametrize("kind, option", [("technology", "Kubernetes"), ("language", "German")])

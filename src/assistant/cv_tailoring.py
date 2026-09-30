@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 import time
-from copy import deepcopy
 from pathlib import Path
 from typing import Callable, Literal, TypeVar
 
@@ -16,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from assistant.cv_generator import (
     CLIENT_PREFIX,
+    CONTEXT_BULLETS,
     CV,
     MAX_AI_NATIVE,
     MAX_BULLETS,
@@ -126,7 +126,6 @@ class Draft(StrictModel):
     # Validate entries independently so one malformed target cannot discard others.
     bullets: dict[str, object] = Field(default_factory=dict)
     summary_sentences: list[object] = Field(default_factory=list)
-    sentences: list[object] = Field(default_factory=list)
 
 
 class SentenceVerdict(StrictModel):
@@ -136,7 +135,7 @@ class SentenceVerdict(StrictModel):
 
 
 class Review(StrictModel):
-    verdicts: dict[str, object] | list[object]
+    verdicts: dict[str, object]
 
 
 class RewriteAudit(StrictModel):
@@ -503,6 +502,10 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
             requirement = requirement.model_copy(update={
                 "criteria": normalize_criteria(requirement),
             })
+            if not requirement.criteria:
+                raise ModelOutputError(
+                    f"{requirement.id} has no assessable criteria in the parsed job."
+                )
             unique.append(requirement)
     return ParsedJob(requirements=unique)
 
@@ -550,101 +553,6 @@ def checked_matches(
             })
         by_id[match.requirement_id] = match
     return [by_id[item.id] for item in requirements]
-
-
-def request_matches(
-    llm: Runnable, instruction: str, data: dict, job: ParsedJob,
-    evidence: list[EvidenceItem],
-    *,
-    stage: str = "matching",
-) -> list[RequirementMatch]:
-    schema = Matches.model_json_schema()
-    properties = schema["$defs"]["RequirementMatch"]["properties"]
-    properties["requirement_id"]["enum"] = [
-        requirement.id for requirement in job.requirements
-    ]
-    for field in ("evidence_ids", "inspected_evidence_ids"):
-        if evidence:
-            properties[field]["items"]["enum"] = [item.id for item in evidence]
-        else:
-            properties[field]["maxItems"] = 0
-    criterion_ids = [
-        criterion.id for requirement in job.requirements for criterion in requirement.criteria
-    ]
-    if criterion_ids:
-        schema["$defs"]["RequirementMatch"]["required"].append("criteria_matches")
-        criterion_properties = schema["$defs"]["CriterionMatch"]["properties"]
-        criterion_properties["criterion_id"]["enum"] = criterion_ids
-        if evidence:
-            criterion_properties["evidence_ids"]["items"]["enum"] = [
-                item.id for item in evidence
-            ]
-        else:
-            criterion_properties["evidence_ids"]["maxItems"] = 0
-    keyed = {}
-    for requirement in job.requirements:
-        match_schema = deepcopy(schema["$defs"]["RequirementMatch"])
-        match_schema["properties"]["requirement_id"]["enum"] = [requirement.id]
-        match_schema["properties"].pop("rule_adjustments")
-        criterion_schemas = {}
-        for criterion in requirement.criteria:
-            criterion_schema = deepcopy(schema["$defs"]["CriterionMatch"])
-            criterion_schema["properties"]["criterion_id"]["enum"] = [criterion.id]
-            criterion_schema["properties"]["evidence_ids"]["maxItems"] = 6
-            criterion_schemas[criterion.id] = criterion_schema
-        match_schema["properties"]["criteria_matches"] = {
-            "type": "object", "properties": criterion_schemas,
-            "required": list(criterion_schemas), "additionalProperties": False,
-        }
-        if "criteria_matches" not in match_schema["required"]:
-            match_schema["required"].append("criteria_matches")
-        match_schema["properties"]["evidence_ids"]["maxItems"] = 6
-        keyed[requirement.id] = match_schema
-    schema["properties"]["matches"] = {
-        "type": "object", "properties": keyed,
-        "required": list(keyed), "additionalProperties": False,
-    }
-    for attempt in range(2):
-        try:
-            return checked_matches(
-                request(
-                    llm, Matches, instruction, data, json_schema=schema,
-                    transform_response=unkey_matches,
-                    stage=stage,
-                ),
-                job.requirements, evidence,
-            )
-        except ModelOutputError as exc:
-            if attempt == 1:
-                raise
-            instruction += f"\nYour previous response was invalid: {exc} Correct it."
-    raise AssertionError("Unreachable matching attempt.")
-
-
-def unkey_matches(response: str) -> str:
-    """Convert grammar-enforced keyed coverage to the portable report lists."""
-    try:
-        payload = json.loads(response)
-    except json.JSONDecodeError as exc:
-        raise ModelOutputError("Matching returned invalid JSON.", response) from exc
-    if not isinstance(payload, dict) or not isinstance(payload.get("matches"), dict):
-        return response
-    matches = []
-    for requirement_id, match in payload["matches"].items():
-        if not isinstance(match, dict) or match.get("requirement_id") != requirement_id:
-            raise ModelOutputError("A keyed requirement match has an inconsistent ID.", response)
-        criteria = match.get("criteria_matches")
-        if not isinstance(criteria, dict):
-            raise ModelOutputError("A keyed requirement match has invalid criteria.", response)
-        decisions = []
-        for criterion_id, decision in criteria.items():
-            if not isinstance(decision, dict) or decision.get("criterion_id") != criterion_id:
-                raise ModelOutputError("A keyed criterion match has an inconsistent ID.", response)
-            decisions.append(decision)
-        match["criteria_matches"] = decisions
-        matches.append(match)
-    payload["matches"] = matches
-    return json.dumps(payload)
 
 
 def mentions(text: str, phrase: str) -> bool:
@@ -1049,11 +957,11 @@ def match_job(
     known: dict[str, CriterionMatch] = {}
     tasks = []
     candidates = {}
-    legacy = []
     for requirement in job.requirements:
         if not requirement.criteria:
-            legacy.append(requirement)
-            continue
+            raise ModelOutputError(
+                f"{requirement.id} has no criteria; reparse the job with --refresh-job-analysis."
+            )
         explicit = [
             explicit_criterion_match(criterion, evidence)
             for criterion in requirement.criteria if criterion.kind != "general"
@@ -1081,28 +989,8 @@ def match_job(
                     llm, batch, {key: value for key, value in candidates.items() if key in ids}
                 )
             )
-    legacy_results = {}
-    if legacy:
-        legacy_job = ParsedJob(requirements=legacy)
-        data = {
-            "requirements": [item.model_dump() for item in legacy],
-            "evidence": [item.model_dump() for item in evidence],
-        }
-        instruction = (
-            "Assess each legacy requirement against explicit CV evidence. "
-            "Positive decisions need citations; not_evidenced uses []. "
-            "Do not infer absent technologies, language proficiency or ownership. "
-            "Return matches keyed by requirement_id with empty criteria_matches."
-        )
-        proposed = request_matches(llm, instruction, data, legacy_job, evidence)
-        data["proposed_matches"] = [item.model_dump() for item in proposed]
-        reviewed = request_matches(
-            llm, "Independently verify and correct proposed matches. " + instruction,
-            data, legacy_job, evidence, stage="matching_review",
-        )
-        legacy_results = {item.requirement_id: item for item in reviewed}
     combined = [
-        legacy_results[requirement.id] if not requirement.criteria else RequirementMatch(
+        RequirementMatch(
             requirement_id=requirement.id, status="unclear", evidence_ids=[],
             explanation="Aggregating explicit and reviewed semantic criteria.",
             criteria_matches=[known[item.id] for item in requirement.criteria],
@@ -1135,6 +1023,7 @@ def score_matches(
 
 
 def select_evidence(report: TailoringReport) -> list[EvidenceItem]:
+    report.contextual_evidence_ids = []
     relevance: dict[str, float] = {}
     named_skills: set[str] = set()
     requirements = {item.id: item for item in report.requirements}
@@ -1179,7 +1068,9 @@ def select_evidence(report: TailoringReport) -> list[EvidenceItem]:
                 elif anchor is not None:
                     anchors[item.id] = anchor
             chosen: dict[str, EvidenceItem] = {}
-            for item in sorted(relevant, key=lambda item: -relevance[item.id]):
+            ranked = sorted(relevant, key=lambda item: -relevance[item.id])
+            ranked.extend(item for item in items if relevance.get(item.id, 0) == 0)
+            for item in ranked:
                 required = [item]
                 if item.id in anchors:
                     required.append(anchors[item.id])
@@ -1193,8 +1084,9 @@ def select_evidence(report: TailoringReport) -> list[EvidenceItem]:
             )
         else:
             # Keep chronology visible without manufacturing relevance.
-            selected.append(items[0])
-            report.contextual_evidence_ids.append(items[0].id)
+            context = items[:CONTEXT_BULLETS]
+            selected.extend(context)
+            report.contextual_evidence_ids.extend(item.id for item in context)
     report.selected_evidence_ids = [item.id for item in selected]
     return selected
 
@@ -1335,8 +1227,20 @@ def rewrite(
         draft = request(
             llm,
             Draft,
-            "Polish selected bullets, emphasizing only actual job-relevant facts. "
-            "Return bullets as an object keyed by EXACT bullet evidence IDs, with "
+            "Rewrite every selected work-experience bullet into clear, concise, "
+            "professional CV language, rather than merely selecting, reordering, "
+            "or copying the source bullets. Use direct action verbs, remove wordiness, "
+            "and improve sentence structure while preserving every factual detail. "
+            "Highlight outcomes only when the original bullet states them; never "
+            "invent impact or metrics to make a bullet sound stronger. Keep the "
+            "original wording only when no safe wording improvement is possible. "
+            + (
+                "Emphasize facts relevant to the job without adding its requirements "
+                "as candidate experience. "
+                if description is not None
+                else "Use general-purpose wording without targeting a particular job. "
+            )
+            + "Return bullets as an object keyed by EXACT bullet evidence IDs, with "
             "source_ids containing only that same ID and text. Never combine "
             "different bullets/projects, borrow skills from other evidence, remove "
             "client prefixes, or change ownership, scale, tools, numbers or qualifiers. "
@@ -1379,7 +1283,6 @@ def rewrite(
             {**value, "target_id": "summary"} if isinstance(value, dict) else {}
             for value in draft.summary_sentences
         ]
-        entries += draft.sentences
         grouped: dict[str, list[object]] = {}
         id_counts: dict[str, int] = {}
         for entry in entries:
@@ -1484,13 +1387,12 @@ def rewrite(
                 transform_response=lambda response: capture_rewrite_response(raw_review, response),
                 stage="rewrite_review",
             )
-            entries = (
-                [{**value, "id": sid,
-                  **({"invalid_keyed_fields": True} if set(value) - {"status", "reason"} else {})}
-                 if isinstance(value, dict) else {"id": sid}
-                 for sid, value in review.verdicts.items()]
-                if isinstance(review.verdicts, dict) else review.verdicts
-            )
+            entries = [
+                {**value, "id": sid,
+                 **({"invalid_keyed_fields": True} if set(value) - {"status", "reason"} else {})}
+                if isinstance(value, dict) else {"id": sid}
+                for sid, value in review.verdicts.items()
+            ]
             grouped_verdicts: dict[str, list[object]] = {}
             for entry in entries:
                 if isinstance(entry, dict) and isinstance(entry.get("id"), str):

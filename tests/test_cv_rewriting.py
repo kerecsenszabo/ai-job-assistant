@@ -79,24 +79,16 @@ def test_wrong_citation_rejects_only_affected_target(setup, citation):
     assert IDS[0] not in calls[1][1]["format"]["properties"]["verdicts"]["properties"]
 
 
-@pytest.mark.parametrize("duplicate", ["id", "target"])
-def test_legacy_duplicate_ids_or_targets_are_not_silently_accepted(setup, duplicate):
-    entries = [
-        {"id": f"b{i}", "target_id": sid, "source_ids": [sid], "text": text}
-        for i, (sid, text) in enumerate(zip(IDS, CHANGED))
-    ]
-    if duplicate == "id":
-        entries[1]["id"] = entries[0]["id"]
-        review_ids = ["b2"]
-        expected = [*ORIGINALS[:2], CHANGED[2]]
-    else:
-        entries.append(dict(entries[0], id="extra"))
-        review_ids = ["b1", "b2"]
-        expected = [ORIGINALS[0], *CHANGED[1:]]
-    result, report, _, _ = run(setup, [{"sentences": entries}, verdicts(review_ids)])
-    assert result.experience[0].bullets == expected
-    assert report.invalid_rewrite_response
-    assert any("Duplicate" in a.reason for a in report.rewrites)
+def test_unkeyed_legacy_draft_cannot_export(setup):
+    old_draft = {"sentences": [
+        {"id": sid, "target_id": sid, "source_ids": [sid], "text": text}
+        for sid, text in zip(IDS, CHANGED)
+    ]}
+    result, report, _, calls = run(setup, [old_draft])
+    assert result.experience[0].bullets == ORIGINALS
+    assert report.invalid_rewrite_response == json.dumps(old_draft)
+    assert all(a.status == "unclear" for a in report.rewrites)
+    assert len(calls) == 1
 
 
 def test_duplicate_json_target_key_degrades_only_that_target(setup):
@@ -142,13 +134,13 @@ def test_duplicate_json_review_key_degrades_only_that_candidate(setup):
     assert report.invalid_review_response == response
 
 
-def test_duplicate_review_verdict_blocks_only_affected_candidate(setup):
+def test_legacy_list_review_cannot_export_changed_candidates(setup):
     review = {"verdicts": [
         {"id": sid, "status": "supported", "reason": "Supported."} for sid in IDS
     ]}
     review["verdicts"].append(dict(review["verdicts"][0]))
     result, report, _, _ = run(setup, [proposal(), review])
-    assert result.experience[0].bullets == [ORIGINALS[0], *CHANGED[1:]]
+    assert result.experience[0].bullets == ORIGINALS
     assert report.invalid_review_response
 
 
@@ -195,6 +187,21 @@ def test_dynamic_schemas_require_exact_targets_and_citations(setup):
     review = calls[1][1]["format"]["properties"]["verdicts"]
     assert review["required"] == IDS
     assert review["additionalProperties"] is False
+
+
+@pytest.mark.parametrize("description", [None, "Python role"])
+def test_prompt_requests_actual_experience_rewriting_in_both_modes(setup, description):
+    result, _, _, calls = run(setup, [proposal(), verdicts()], description=description)
+    instruction = calls[0][0].to_messages()[0].content
+    assert "Rewrite every selected work-experience bullet" in instruction
+    assert "Use direct action verbs" in instruction
+    assert "preserving every factual detail" in instruction
+    assert "never invent impact or metrics" in instruction
+    if description is None:
+        assert "Use general-purpose wording" in instruction
+    else:
+        assert "Emphasize facts relevant to the job" in instruction
+    assert result.experience[0].bullets == CHANGED
 
 
 @pytest.mark.parametrize("failure", ["unsupported", "missing", "bad_source"])

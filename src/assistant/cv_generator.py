@@ -27,9 +27,10 @@ MODEL = "granite4.2:3b"
 CONTEXT_TOKENS = 16384
 # Models that answer with an empty string when reasoning is switched off.
 REASONING_REQUIRED = ("gpt-oss",)
-MAX_SKILLS = 10
-MAX_AI_NATIVE = 3
-MAX_BULLETS = 4
+MAX_SKILLS = 14
+MAX_AI_NATIVE = 4
+MAX_BULLETS = 6
+CONTEXT_BULLETS = 2
 
 
 @dataclass
@@ -217,16 +218,6 @@ def tailor_cv(
     return result
 
 
-def polish_cv(cv: CV, *, model: str = MODEL, llm: Runnable | None = None) -> CV:
-    """Polish prose only when an independent evidence review accepts it."""
-    from assistant.cv_tailoring import polish_with_report
-
-    result, report = polish_with_report(cv, llm or local_llm(model))
-    for warning in report.warnings:
-        print(f"Warning: {warning}", file=sys.stderr)
-    return result
-
-
 def escape_latex(value: str) -> str:
     """Escape text inserted into a LaTeX document."""
     replacements = {
@@ -252,7 +243,7 @@ def to_latex(cv: CV) -> str:
         if value
     )
     lines = [
-        r"\documentclass[12pt,a4paper]{article}",
+        r"\documentclass[11pt,a4paper]{article}",
         r"\usepackage[margin=1.6cm]{geometry}",
         r"\usepackage[hidelinks]{hyperref}",
         r"\usepackage{enumitem}",
