@@ -99,6 +99,10 @@ generated JSON and `.tex` are saved beside the PDF, and the `output/` directory
 is gitignored so tailored CVs stay private. PDF creation uses `pdflatex` when
 available, or Tectonic as a user-level alternative:
 
+Ollama receives a Pydantic-generated JSON schema for each operation, so its
+selection, summary and polishing responses are constrained to the structures
+the generator validates.
+
 ```bash
 brew install tectonic
 ```

@@ -13,6 +13,7 @@ from typing import Any
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import Runnable
 from langchain_ollama import OllamaLLM
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,9 +22,14 @@ MODEL = "llama3.1:8b"
 CONTEXT_TOKENS = 16384
 
 
-def json_llm(model: str) -> OllamaLLM:
-    """Local LLM constrained to emit JSON, with room for a full CV round-trip."""
-    return OllamaLLM(model=model, format="json", temperature=0, num_ctx=CONTEXT_TOKENS)
+def local_llm(model: str) -> OllamaLLM:
+    """Local LLM with room for a full CV round-trip."""
+    return OllamaLLM(model=model, temperature=0, num_ctx=CONTEXT_TOKENS)
+
+
+def structured_llm(llm: Runnable, schema: type[BaseModel]) -> Runnable:
+    """Constrain an Ollama request to the JSON schema for *schema*."""
+    return llm.bind(format=schema.model_json_schema())
 
 
 class Experience(BaseModel):
@@ -44,12 +50,16 @@ class PolishedExperience(BaseModel):
 class TailorSelection(BaseModel):
     """Ids of existing CV items, ranked by relevance to a job."""
 
+    model_config = ConfigDict(extra="forbid")
+
     skills: list[int] = Field(default_factory=list)
     ai_native: list[int] = Field(default_factory=list)
     experience: list[list[int]] = Field(default_factory=list)
 
 
 class TailoredSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     summary: str = Field(min_length=1)
 
 
@@ -259,7 +269,7 @@ def tailor_cv(
     if not job_description.strip():
         raise ValueError("Job description cannot be empty.")
     job_description = job_description.strip()
-    llm = llm or json_llm(model)
+    llm = llm or local_llm(model)
 
     items = {
         "skills": dict(enumerate(cv.skills)),
@@ -273,7 +283,9 @@ def tailor_cv(
             for item in cv.experience
         ],
     }
-    response = (SELECT_PROMPT | llm | StrOutputParser()).invoke(
+    response = (
+        SELECT_PROMPT | structured_llm(llm, TailorSelection) | StrOutputParser()
+    ).invoke(
         {"job_description": job_description, "items_json": json.dumps(items, indent=2)}
     )
     try:
@@ -306,7 +318,9 @@ def tailor_cv(
     source_text = cv.model_dump_json()
     feedback = ""
     for _ in range(SUMMARY_ATTEMPTS):
-        response = (SUMMARY_PROMPT | llm | StrOutputParser()).invoke(
+        response = (
+            SUMMARY_PROMPT | structured_llm(llm, TailoredSummary) | StrOutputParser()
+        ).invoke(
             {
                 "job_description": job_description,
                 "evidence_json": json.dumps(evidence, indent=2),
@@ -335,7 +349,11 @@ def tailor_cv(
 
 def polish_cv(cv: CV, *, model: str = MODEL, llm: Any | None = None) -> CV:
     """Polish experience prose without selecting or filtering CV content."""
-    chain = POLISH_PROMPT | (llm or json_llm(model)) | StrOutputParser()
+    chain = (
+        POLISH_PROMPT
+        | structured_llm(llm or local_llm(model), PolishedExperience)
+        | StrOutputParser()
+    )
     response = chain.invoke(
         {
             "experience_json": json.dumps(
