@@ -1,0 +1,85 @@
+{
+  "name": "Ada Example",
+  "email": "ada.example@example.com",
+  "phone": "+00 000 000 0000",
+  "location": "City, Country",
+  "links": ["https://www.linkedin.com/in/example"],
+  "summary": "Short profile describing what you build, how many years of experience you have and the kind of problems you solve. Keep it factual: every claim here should be supported by the experience below.",
+  "skills": [
+    "Production ML Systems",
+    "ML Platform Architecture",
+    "Business Requirements to Production Solutions",
+    "Stakeholder Collaboration",
+    "Python",
+    "Apache Spark",
+    "Databricks",
+    "Azure",
+    "MLflow"
+  ],
+  "ai_native": [
+    "Describe how you use AI tools day to day, and how you verify their output before it ships.",
+    "List the AI assistants you work with and what you use them for, such as code generation or pull-request review.",
+    "Mention prompt engineering, LLM and RAG concepts you understand, and the frameworks you have built with."
+  ],
+  "experience": [
+    {
+      "company": "Current Employer Ltd.",
+      "role": "Machine Learning Engineer",
+      "dates": "January 2024 - Present",
+      "bullets": [
+        "What you are building, for whom, and with which core technologies. Keep the source CV detailed: job-specific tailoring selects from this material, so include the projects, responsibilities and tools you can truthfully claim.",
+        "A responsibility that shows ownership, such as designing a component, running performance work or supporting production systems.",
+        "How you work with stakeholders to turn requirements into deployed solutions."
+      ]
+    },
+    {
+      "company": "Consultancy Inc.",
+      "role": "Machine Learning Engineer",
+      "dates": "February 2021 - December 2023",
+      "bullets": [
+        "A summary bullet naming the clients or projects covered by the bullets that follow.",
+        "Client A (2 years): What you delivered, with the technologies used. Name the client once; consecutive bullets about the same client are grouped automatically when the CV is generated.",
+        "Client A: A further responsibility on the same project, such as production support or benchmarking.",
+        "Client B (6 months): A different type of work, such as a data migration or a prototype."
+      ]
+    },
+    {
+      "company": "First Employer Kft.",
+      "role": "Software Engineer",
+      "dates": "July 2017 - January 2021",
+      "bullets": [
+        "Earlier engineering work that shows your foundation, including the languages and domains involved.",
+        "Progression or increasing responsibility, if it applies."
+      ]
+    }
+  ],
+  "education": [
+    {
+      "institution": "Example University",
+      "degree": "Master of Science (MSc), Computer Engineering",
+      "dates": "2019 - 2021"
+    },
+    {
+      "institution": "Example University",
+      "degree": "Bachelor of Science (BSc), Software Engineering",
+      "dates": "2015 - 2019"
+    }
+  ],
+  "publications": [
+    {
+      "title": "Title of a Paper You Published",
+      "authors": "Example, A. and Colleague, B.",
+      "date": "1 January 2022",
+      "publisher": "IEEE",
+      "doi": "10.0000/EXAMPLE.2022.0000000"
+    }
+  ],
+  "certifications": [
+    {
+      "name": "Example Certified Associate Developer",
+      "issuer": "Example Vendor",
+      "date": "2023",
+      "url": "https://example.com/certificate"
+    }
+  ]
+}
