@@ -19,10 +19,12 @@ DEFAULT_DATABASE = Path("output/model-benchmarks.sqlite")
 DEFAULT_JOB_CACHE = Path("output/job-requirements")
 MODEL_SUITE = (
     ("qwen3.5:0.8b", "1.0 GB", "basic"),
-    ("granite4.2:3b", "2.2 GB", "basic"),
-    ("granite4.2:8b", "5.3 GB", "balanced"),
-    ("gemma4:12b", "8.0 GB", "advanced"),
-    ("gemma4:26b-a4b", "18 GB", "advanced"),
+    ("granite4.2:3b", "2.2 GB", "baseline"),
+    ("qwen3.5:2b-q4_K_M", "1.9 GB", "candidate"),
+    ("qwen3.5:4b-q4_K_M", "3.4 GB", "candidate"),
+    ("ministral-3:3b-instruct-2512-q4_K_M", "3.0 GB", "candidate"),
+    ("gemma4:e2b-it-qat", "4.3 GB", "candidate"),
+    ("phi4-mini:3.8b-q4_K_M", "2.5 GB", "candidate"),
 )
 WORD = re.compile(r"[a-z][a-z0-9+#.-]{2,}")
 STOPWORDS = {
@@ -593,10 +595,15 @@ def model_diversity(
 def list_models() -> None:
     """Display the curated model ladder and local installation status."""
     available = installed_model_info()
-    print("model                         size      tier       installed")
-    print("-" * 67)
+    print(f"{'model':<44} {'download':<9} {'tier':<10} installed")
+    print("-" * 74)
     for model, size, tier in MODEL_SUITE:
-        print(f"{model:<29} {size:<9} {tier:<10} {'yes' if model in available else 'no'}")
+        print(f"{model:<44} {size:<9} {tier:<10} {'yes' if model in available else 'no'}")
+    print(
+        "\nDownload sizes are not runtime RAM. This shortlist targets 8 GB total RAM;\n"
+        "16K context, runtime buffers and the OS need additional memory.\n"
+        "Candidate peak memory and swap use must be measured before deployment."
+    )
 
 
 def parse_args() -> argparse.Namespace:

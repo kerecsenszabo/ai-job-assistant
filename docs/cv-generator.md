@@ -176,9 +176,15 @@ but generation and verification of genuinely changed wording still run.
 ## Benchmarking Local Models
 
 The benchmark runner compares Ollama models on the actual CV-tailoring workload
-and stores every result in SQLite. The curated suite includes Qwen 0.8B,
-Granite 3B/8B, and Gemma 12B/26B. Run `models` for the current list and installed
-status. Hidden reasoning is disabled where supported so structured JSON remains
+and stores every result in SQLite. The default shortlist targets machines with
+8 GB total RAM: Qwen3.5 0.8B as a lightweight option, Granite 4.2 3B as the
+baseline, and Qwen3.5 2B/4B Q4_K_M plus Ministral 3 3B Instruct Q4_K_M as
+challengers. Run `models` for exact tags, download sizes and installed status.
+Download sizes are not runtime RAM: the 16K context, runtime buffers, OS and
+application also need memory. Peak memory and swap use are not yet measured;
+the shortlist is not a guarantee of fitting within 8 GB. Larger models remain
+selectable explicitly with `--models`.
+Hidden reasoning is disabled where supported so structured JSON remains
 in the output channel. `gpt-oss`, when selected explicitly, requires its default
 reasoning mode.
 
@@ -186,11 +192,11 @@ reasoning mode.
 # See the suite and which models are already installed
 uv run python -m assistant.model_benchmark models
 
-# Compare the default fast model to an 8B alternative
+# Compare the default model to a smaller-memory challenger
 uv run python -m assistant.model_benchmark run \
   --cv data/cv.json \
   --jobs data/job_descriptions/target.txt \
-  --models granite4.2:3b granite4.2:8b \
+  --models granite4.2:3b qwen3.5:4b-q4_K_M \
   --pull
 
 # Reprint the latest stored report

@@ -20,6 +20,29 @@ REPORT_COLUMNS = (
 )
 
 
+def test_list_models_shows_memory_conscious_suite(monkeypatch, capsys):
+    monkeypatch.setattr(
+        benchmark, "installed_model_info",
+        lambda: {"granite4.2:3b": ("digest", "2.2 GB")},
+    )
+    assert [model for model, _, _ in benchmark.MODEL_SUITE] == [
+        "qwen3.5:0.8b",
+        "granite4.2:3b",
+        "qwen3.5:2b-q4_K_M",
+        "qwen3.5:4b-q4_K_M",
+        "ministral-3:3b-instruct-2512-q4_K_M",
+    ]
+    benchmark.list_models()
+    output = capsys.readouterr().out
+    for model, size, tier in benchmark.MODEL_SUITE:
+        line = next(line for line in output.splitlines() if line.startswith(model + " "))
+        assert line.split() == [
+            model, *size.split(), tier, "yes" if model == "granite4.2:3b" else "no",
+        ]
+    assert "Download sizes are not runtime RAM" in output
+    assert "peak memory and swap use must be measured" in output
+
+
 @pytest.fixture
 def workspace():
     # Keep database and job fixtures in the project, not system temporary paths.

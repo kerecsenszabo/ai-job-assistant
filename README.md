@@ -178,7 +178,7 @@ uv run python -m assistant.model_benchmark models
 uv run python -m assistant.model_benchmark run \
   --cv data/cv.json \
   --jobs data/job_descriptions/target.txt \
-  --models granite4.2:3b granite4.2:8b \
+  --models granite4.2:3b qwen3.5:4b-q4_K_M \
   --pull
 
 uv run python -m assistant.model_benchmark report
