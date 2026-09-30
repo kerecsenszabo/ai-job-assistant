@@ -132,7 +132,7 @@ def group_client_bullets(experience: Experience) -> Experience:
         match = CLIENT_PREFIX.match(bullet)
         client = match.group(1) if match else None
         bullets.append(
-            bullet[match.end():]
+            bullet[match.end() :]
             if match is not None and client == previous_client
             else bullet
         )
@@ -175,9 +175,15 @@ def tailor_cv(
 
 def polish_cv(cv: CV, *, model: str = MODEL, llm: Any | None = None) -> CV:
     """Polish experience prose without selecting or filtering CV content."""
-    chain = POLISH_PROMPT | (
-        llm if llm is not None else OllamaLLM(model=model, format="json", temperature=0)
-    ) | StrOutputParser()
+    chain = (
+        POLISH_PROMPT
+        | (
+            llm
+            if llm is not None
+            else OllamaLLM(model=model, format="json", temperature=0)
+        )
+        | StrOutputParser()
+    )
     response = chain.invoke(
         {
             "experience_json": json.dumps(
@@ -189,7 +195,9 @@ def polish_cv(cv: CV, *, model: str = MODEL, llm: Any | None = None) -> CV:
     try:
         polished = PolishedExperience.model_validate_json(response)
     except (json.JSONDecodeError, ValueError) as exc:
-        raise ValueError("The language model returned invalid experience JSON.") from exc
+        raise ValueError(
+            "The language model returned invalid experience JSON."
+        ) from exc
     if len(polished.experience) != len(cv.experience) or any(
         (item.company, item.role, item.dates, len(item.bullets))
         != (source.company, source.role, source.dates, len(source.bullets))
