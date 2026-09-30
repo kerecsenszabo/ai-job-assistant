@@ -87,13 +87,17 @@ uv run python -m assistant.cv_generator \
 Both commands use the local Ollama model (`--model` overrides the default
 `llama3.1:8b`). Without `--job`, it only polishes the experience prose —
 including repeated client names in consecutive bullets — and keeps every bullet
-and every other section as written. With `--job`, it selects and rewrites
-evidence for the posting. An optional `"ai_native": ["..."]` list in the source
-JSON provides a separate AI-Native Practice section for cross-role AI tooling
-and projects; job-specific tailoring keeps it separate from employer-specific
-experience. The generated JSON and `.tex` are saved beside the PDF, and the
-`output/` directory is gitignored so tailored CVs stay private. PDF creation
-uses `pdflatex` when available, or Tectonic as a user-level alternative:
+and every other section as written. With `--job`, the model ranks your existing
+skills, AI-native items and experience bullets by relevance (it never writes
+bullet text, so it cannot invent responsibilities), then writes a tailored
+summary from the selected evidence. A summary naming anything absent from your
+source CV is retried, then replaced by your original summary. Contact details,
+education, publications and certifications are always copied from the source.
+An optional `"ai_native": ["..."]` list in the source JSON provides a separate
+AI-Native Practice section for cross-role AI tooling and projects. The
+generated JSON and `.tex` are saved beside the PDF, and the `output/` directory
+is gitignored so tailored CVs stay private. PDF creation uses `pdflatex` when
+available, or Tectonic as a user-level alternative:
 
 ```bash
 brew install tectonic

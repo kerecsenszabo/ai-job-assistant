@@ -7,6 +7,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,13 @@ from langchain_ollama import OllamaLLM
 from pydantic import BaseModel, ConfigDict, Field
 
 MODEL = "llama3.1:8b"
+# Source CV + job description + full JSON reply exceeds Ollama's default window.
+CONTEXT_TOKENS = 16384
+
+
+def json_llm(model: str) -> OllamaLLM:
+    """Local LLM constrained to emit JSON, with room for a full CV round-trip."""
+    return OllamaLLM(model=model, format="json", temperature=0, num_ctx=CONTEXT_TOKENS)
 
 
 class Experience(BaseModel):
@@ -31,6 +39,18 @@ class PolishedExperience(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     experience: list[Experience]
+
+
+class TailorSelection(BaseModel):
+    """Ids of existing CV items, ranked by relevance to a job."""
+
+    skills: list[int] = Field(default_factory=list)
+    ai_native: list[int] = Field(default_factory=list)
+    experience: list[list[int]] = Field(default_factory=list)
+
+
+class TailoredSummary(BaseModel):
+    summary: str = Field(min_length=1)
 
 
 class Education(BaseModel):
@@ -80,22 +100,46 @@ class CV(BaseModel):
     certifications: list[Certification] = Field(default_factory=list)
 
 
-TAILOR_PROMPT = ChatPromptTemplate.from_messages(
+SELECT_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            """You tailor CVs for a job application. Return only valid JSON matching
-the supplied CV schema. Use only facts present in the source CV; never invent
-employers, dates, metrics, technologies, or qualifications. Reorder skills and
-experience for relevance. Tailor the summary and select or rewrite experience
-bullets to highlight the most relevant responsibilities supported by the source CV.
-Keep the separate ai_native section in the output, adapting its wording for
-relevance without attributing its claims to specific employers. Keep every claim
-truthful and concise.""",
+            """You select CV content for a job application. You never write CV text;
+you only rank existing items by their numeric ids. Return only a JSON object:
+{{"skills": [ids], "ai_native": [ids], "experience": [[ids], ...]}}
+- skills: ids of the skills relevant to the job, most relevant first.
+- ai_native: ids of all ai_native items, most relevant first.
+- experience: one list per role, in the given role order. Each list holds the
+  ids of that role's bullets most relevant to the job, most relevant first.
+  Prefer bullets showing seniority and ownership when they are relevant.""",
         ),
         (
             "human",
-            "Job description:\n{job_description}\n\nSource CV JSON:\n{cv_json}",
+            "Job description:\n{job_description}\n\nNumbered CV items:\n{items_json}",
+        ),
+    ]
+)
+
+
+SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """Write the profile summary of a CV tailored to a job. Return only a
+JSON object: {{"summary": "..."}}.
+The candidate evidence is the only source of facts; the job description only
+tells you what to emphasise. Never claim a technology, framework, cloud,
+domain or experience the evidence does not mention, even if the job asks for
+it. Do not mention or describe the hiring company. Start from the original
+summary and adapt it: bring forward the evidence, including ai_native items,
+that matches the job's main requirements. Write 3-4 concise sentences in the
+same first-person voice as the original summary. Avoid cliches such as
+"seasoned", "proven track record", "results-driven" or "I am excited".""",
+        ),
+        (
+            "human",
+            "Job description:\n{job_description}\n\n"
+            "Candidate evidence JSON:\n{evidence_json}{feedback}",
         ),
     ]
 )
@@ -150,6 +194,54 @@ def load_cv(path: Path) -> CV:
         raise ValueError(f"CV JSON is invalid: {path}") from exc
 
 
+def same_roles(generated: list[Any], source: list[Experience]) -> bool:
+    """Whether the LLM kept every role with its company, title and dates."""
+    return len(generated) == len(source) and all(
+        (item.company, item.role, item.dates)
+        == (original.company, original.role, original.dates)
+        for item, original in zip(generated, source)
+    )
+
+
+MIN_SKILLS = 8
+MIN_BULLETS = 3
+SUMMARY_ATTEMPTS = 2
+TERM = re.compile(r"[A-Za-z][A-Za-z0-9+#]*")
+
+
+def ranked(ids: list[int], count: int, minimum: int) -> list[int]:
+    """Valid, unique ids in the model's order, topped up to *minimum* items."""
+    chosen = list(dict.fromkeys(i for i in ids if 0 <= i < count))
+    chosen += [i for i in range(count) if i not in chosen][
+        : max(0, minimum - len(chosen))
+    ]
+    return chosen
+
+
+def cluster_by_client(bullets: list[str]) -> list[str]:
+    """Keep bullets about the same client together, in order of first mention."""
+    groups: dict[object, list[str]] = {}
+    for bullet in bullets:
+        match = CLIENT_PREFIX.match(bullet)
+        groups.setdefault(match.group(1) if match else object(), []).append(bullet)
+    return [bullet for group in groups.values() for bullet in group]
+
+
+def unsupported_terms(text: str, source: str) -> list[str]:
+    """Proper nouns and acronyms in *text* that the source CV never mentions."""
+    known = source.casefold()
+    terms = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        for position, match in enumerate(TERM.finditer(sentence)):
+            word = match.group()
+            notable = any(c.isupper() for c in word[1:]) or (
+                position > 0 and word[0].isupper()
+            )
+            if notable and word.casefold() not in known:
+                terms.append(word)
+    return list(dict.fromkeys(terms))
+
+
 def tailor_cv(
     cv: CV,
     job_description: str,
@@ -157,33 +249,93 @@ def tailor_cv(
     model: str = MODEL,
     llm: Any | None = None,
 ) -> CV:
-    """Use the local LLM to tailor *cv* to *job_description*."""
+    """Use the local LLM to tailor *cv* to *job_description*.
+
+    The model only ranks existing skills, AI-native items and experience
+    bullets, so it cannot invent responsibilities. It then writes a summary
+    from the selected evidence; summaries naming anything absent from the
+    source CV are retried and, failing that, replaced by the source summary.
+    """
     if not job_description.strip():
         raise ValueError("Job description cannot be empty.")
-    chain = TAILOR_PROMPT | (llm or OllamaLLM(model=model)) | StrOutputParser()
-    response = chain.invoke(
-        {
-            "job_description": job_description.strip(),
-            "cv_json": cv.model_dump_json(indent=2),
-        }
+    job_description = job_description.strip()
+    llm = llm or json_llm(model)
+
+    items = {
+        "skills": dict(enumerate(cv.skills)),
+        "ai_native": dict(enumerate(cv.ai_native)),
+        "experience": [
+            {
+                "company": item.company,
+                "role": item.role,
+                "bullets": dict(enumerate(item.bullets)),
+            }
+            for item in cv.experience
+        ],
+    }
+    response = (SELECT_PROMPT | llm | StrOutputParser()).invoke(
+        {"job_description": job_description, "items_json": json.dumps(items, indent=2)}
     )
     try:
-        return CV.model_validate_json(response)
+        selection = TailorSelection.model_validate_json(response)
     except (json.JSONDecodeError, ValueError) as exc:
-        raise ValueError("The language model returned invalid CV JSON.") from exc
+        raise ValueError("The language model returned an invalid selection.") from exc
+
+    skill_ids = ranked(selection.skills, len(cv.skills), MIN_SKILLS)
+    ai_ids = ranked(selection.ai_native, len(cv.ai_native), len(cv.ai_native))
+    experience = []
+    for index, item in enumerate(cv.experience):
+        ids = selection.experience[index] if index < len(selection.experience) else []
+        bullets = [item.bullets[i] for i in ranked(ids, len(item.bullets), MIN_BULLETS)]
+        experience.append(
+            group_client_bullets(
+                item.model_copy(update={"bullets": cluster_by_client(bullets)})
+            )
+        )
+    tailored = cv.model_copy(
+        update={
+            "skills": [cv.skills[i] for i in skill_ids],
+            "ai_native": [cv.ai_native[i] for i in ai_ids],
+            "experience": experience,
+        }
+    )
+
+    evidence = tailored.model_dump(
+        include={"summary", "skills", "ai_native", "experience"}
+    )
+    source_text = cv.model_dump_json()
+    feedback = ""
+    for _ in range(SUMMARY_ATTEMPTS):
+        response = (SUMMARY_PROMPT | llm | StrOutputParser()).invoke(
+            {
+                "job_description": job_description,
+                "evidence_json": json.dumps(evidence, indent=2),
+                "feedback": feedback,
+            }
+        )
+        try:
+            summary = TailoredSummary.model_validate_json(response).summary
+        except (json.JSONDecodeError, ValueError):
+            feedback = "\n\nYour previous reply was not valid JSON. Try again."
+            continue
+        unsupported = unsupported_terms(summary, source_text)
+        if not unsupported:
+            return tailored.model_copy(update={"summary": summary})
+        feedback = (
+            "\n\nYour previous summary mentioned terms the evidence does not "
+            f"support: {', '.join(unsupported)}. Rewrite it without them."
+        )
+    print(
+        "Warning: kept the source summary; the model's tailored summary was not "
+        "supported by the CV.",
+        file=sys.stderr,
+    )
+    return tailored
 
 
 def polish_cv(cv: CV, *, model: str = MODEL, llm: Any | None = None) -> CV:
     """Polish experience prose without selecting or filtering CV content."""
-    chain = (
-        POLISH_PROMPT
-        | (
-            llm
-            if llm is not None
-            else OllamaLLM(model=model, format="json", temperature=0)
-        )
-        | StrOutputParser()
-    )
+    chain = POLISH_PROMPT | (llm or json_llm(model)) | StrOutputParser()
     response = chain.invoke(
         {
             "experience_json": json.dumps(
@@ -198,9 +350,8 @@ def polish_cv(cv: CV, *, model: str = MODEL, llm: Any | None = None) -> CV:
         raise ValueError(
             "The language model returned invalid experience JSON."
         ) from exc
-    if len(polished.experience) != len(cv.experience) or any(
-        (item.company, item.role, item.dates, len(item.bullets))
-        != (source.company, source.role, source.dates, len(source.bullets))
+    if not same_roles(polished.experience, cv.experience) or any(
+        len(item.bullets) != len(source.bullets)
         for item, source in zip(polished.experience, cv.experience)
     ):
         raise ValueError("The language model changed the experience structure.")
