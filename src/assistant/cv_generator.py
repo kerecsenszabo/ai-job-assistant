@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -20,6 +20,13 @@ from pydantic import BaseModel, ConfigDict, Field
 MODEL = "llama3.1:8b"
 # Source CV + job description + full JSON reply exceeds Ollama's default window.
 CONTEXT_TOKENS = 16384
+MIN_SKILLS = 8
+MAX_SKILLS = 10
+MIN_AI_NATIVE = 2
+MAX_AI_NATIVE = 3
+MIN_BULLETS = 3
+MAX_BULLETS = 4
+SUMMARY_ATTEMPTS = 2
 
 
 def local_llm(model: str) -> OllamaLLM:
@@ -52,9 +59,11 @@ class TailorSelection(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    skills: list[int] = Field(default_factory=list)
-    ai_native: list[int] = Field(default_factory=list)
-    experience: list[list[int]] = Field(default_factory=list)
+    skills: list[int] = Field(default_factory=list, max_length=MAX_SKILLS)
+    ai_native: list[int] = Field(default_factory=list, max_length=MAX_AI_NATIVE)
+    experience: list[
+        Annotated[list[int], Field(max_length=MAX_BULLETS)]
+    ] = Field(default_factory=list)
 
 
 class TailoredSummary(BaseModel):
@@ -118,10 +127,14 @@ SELECT_PROMPT = ChatPromptTemplate.from_messages(
 you only rank existing items by their numeric ids. Return only a JSON object:
 {{"skills": [ids], "ai_native": [ids], "experience": [[ids], ...]}}
 - skills: ids of the skills relevant to the job, most relevant first.
-- ai_native: ids of all ai_native items, most relevant first.
+- ai_native: ids of the ai_native items most relevant to the job.
 - experience: one list per role, in the given role order. Each list holds the
   ids of that role's bullets most relevant to the job, most relevant first.
-  Prefer bullets showing seniority and ownership when they are relevant.""",
+  Prefer bullets showing seniority and ownership when they are relevant.
+Select 8-10 skills, 2-3 ai_native items, and 3-4 bullets per role. Do not
+include an item merely to preserve the source CV; omit weaker evidence so the
+result is meaningfully tailored to this specific job. Prefer concrete projects
+and technologies that directly match requirements over general practices.""",
         ),
         (
             "human",
@@ -213,15 +226,13 @@ def same_roles(generated: list[Any], source: list[Experience]) -> bool:
     )
 
 
-MIN_SKILLS = 8
-MIN_BULLETS = 3
-SUMMARY_ATTEMPTS = 2
 TERM = re.compile(r"[A-Za-z][A-Za-z0-9+#]*")
 
 
-def ranked(ids: list[int], count: int, minimum: int) -> list[int]:
-    """Valid, unique ids in the model's order, topped up to *minimum* items."""
+def ranked(ids: list[int], count: int, minimum: int, maximum: int) -> list[int]:
+    """Valid unique ids, capped and topped up within the requested range."""
     chosen = list(dict.fromkeys(i for i in ids if 0 <= i < count))
+    chosen = chosen[:maximum]
     chosen += [i for i in range(count) if i not in chosen][
         : max(0, minimum - len(chosen))
     ]
@@ -293,12 +304,23 @@ def tailor_cv(
     except (json.JSONDecodeError, ValueError) as exc:
         raise ValueError("The language model returned an invalid selection.") from exc
 
-    skill_ids = ranked(selection.skills, len(cv.skills), MIN_SKILLS)
-    ai_ids = ranked(selection.ai_native, len(cv.ai_native), len(cv.ai_native))
+    skill_ids = ranked(selection.skills, len(cv.skills), MIN_SKILLS, MAX_SKILLS)
+    ai_ids = ranked(
+        selection.ai_native,
+        len(cv.ai_native),
+        MIN_AI_NATIVE,
+        MAX_AI_NATIVE,
+    )
     experience = []
     for index, item in enumerate(cv.experience):
         ids = selection.experience[index] if index < len(selection.experience) else []
-        bullets = [item.bullets[i] for i in ranked(ids, len(item.bullets), MIN_BULLETS)]
+        bullet_ids = ranked(
+            ids,
+            len(item.bullets),
+            MIN_BULLETS,
+            MAX_BULLETS,
+        )
+        bullets = [item.bullets[i] for i in bullet_ids]
         experience.append(
             group_client_bullets(
                 item.model_copy(update={"bullets": cluster_by_client(bullets)})
