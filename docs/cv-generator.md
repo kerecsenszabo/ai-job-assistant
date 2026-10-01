@@ -119,9 +119,8 @@ The default database is `output/benchmarks.sqlite`.
 
 The benchmark runner compares tailoring, not PDF compilation. It reuses parsed
 job criteria but recomputes matching for each case. Benchmark model responses
-are capped at 4096 tokens so a runaway response cannot stall the suite indefinitely.
-Add `--repeat 2` for repeated
-runs, multiple paths after `--jobs` for cross-job comparisons, or `--database`
+are capped at 4096 tokens to limit excessively long responses. Add `--repeat 2`
+for repeated runs, multiple paths after `--jobs` for cross-job comparisons, or `--database`
 for a different SQLite file. Use the same `--database` path for both `run` and
 `report`; `report` defaults to the latest run, or accepts `--run-id`.
 If a job-analysis cache is stale, use `benchmark run --refresh-job-analysis`
