@@ -398,12 +398,26 @@ def split_criterion(criterion: RequirementCriterion) -> list[RequirementCriterio
     named = []
     general = []
     for option in dict.fromkeys(criterion.options):
-        if OPTION_DESCRIPTORS.search(normalized(option)) or (
-            criterion.kind == "technology" and normalized(option) in GENERAL_OPTIONS
+        if criterion.kind == "technology" and FUNCTION_WORDS.fullmatch(option.strip()):
+            continue
+        if (
+            OPTION_DESCRIPTORS.search(normalized(option))
+            or criterion.kind == "technology" and (
+                normalized(option) in GENERAL_OPTIONS
+                or NON_TECHNOLOGY_OPTIONS.fullmatch(option.strip())
+            )
         ):
             if not REDUNDANT_DESCRIPTORS.fullmatch(normalized(option)):
                 general.append(RequirementCriterion(
-                    id=criterion.id, text=option, quote=option, kind="general"
+                    id=criterion.id,
+                    text=(
+                        criterion.text if len(criterion.text.split()) > 1
+                        and normalized(criterion.text) in normalized(criterion.quote)
+                        and len(criterion.options) == 1
+                        else criterion.quote if len(criterion.options) == 1
+                        else option
+                    ),
+                    quote=criterion.quote, kind="general",
                 ))
         else:
             named.append(option)
@@ -458,10 +472,9 @@ def split_criterion(criterion: RequirementCriterion) -> list[RequirementCriterio
                 criterion.experience_required or mentions(criterion.quote, "experience")
             ),
         }))
-    return separated + general or [criterion.model_copy(update={
-        "kind": "general", "options": [], "operator": "all",
-        "production": False, "proficiency": "",
-    })]
+    if not separated and not general:
+        raise ModelOutputError("A technology criterion has no assessable named tools or capabilities.")
+    return separated + general
 
 
 def source_importance(description: str, requirement: Requirement) -> str:
@@ -820,31 +833,37 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
                         "Missing assessable lines under a requirements or "
                         f"responsibilities heading: {missing!r}."
                     )
+                cleaned = []
                 for requirement in job.requirements:
-                    if len(requirement.criteria) > 12 or sum(
-                        item.kind == "general" and len(item.text.split()) == 1
-                        for item in requirement.criteria
-                    ) >= 3:
-                        raise ModelOutputError(
-                            "A source line has too many criteria or standalone "
-                            "words; combine related words into meaningful clauses."
+                    criteria = [
+                        item for item in requirement.criteria
+                        if not (
+                            item.kind == "general"
+                            and FUNCTION_WORDS.fullmatch(item.text.strip())
                         )
-                    for criterion in requirement.criteria:
-                        if (
-                            criterion.kind == "general"
-                            and FUNCTION_WORDS.fullmatch(criterion.text.strip())
-                        ) or (
-                            criterion.kind == "technology"
-                            and any(
-                                NON_TECHNOLOGY_OPTIONS.fullmatch(option.strip())
-                                for option in criterion.options
-                            )
-                        ):
-                            raise ModelOutputError(
-                                "A function word or ordinary capability was "
-                                "extracted as a standalone criterion or technology."
-                            )
+                    ]
+                    if not criteria and requirement.criteria:
+                        raise ModelOutputError(
+                            "A source line has no assessable criteria after removing function words."
+                        )
+                    if len(criteria) > 12 or sum(
+                        item.kind == "general" and len(item.text.split()) == 1
+                        for item in criteria
+                    ) >= 3:
+                        criteria = [
+                            item for item in criteria if item.kind != "general"
+                        ] + [RequirementCriterion(
+                            id=f"{requirement.id}/general",
+                            text=requirement.quote, quote=requirement.quote,
+                        )]
+                    if len(criteria) > 12:
+                        raise ModelOutputError(
+                            "A source line has too many technology or language criteria."
+                        )
+                    requirement = requirement.model_copy(update={"criteria": criteria})
                     normalize_criteria(requirement)
+                    cleaned.append(requirement)
+                job = job.model_copy(update={"requirements": cleaned})
                 break
             except ModelOutputError as exc:
                 if attempt == 2:

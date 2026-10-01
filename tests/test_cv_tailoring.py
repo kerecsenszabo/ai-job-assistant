@@ -489,7 +489,7 @@ def test_parser_restores_wrapped_requirements_and_excludes_repeated_benefits():
     ]
 
 
-def test_parser_retries_word_by_word_criteria():
+def test_parser_combines_word_by_word_criteria():
     source = "Build robust modular scalable machine learning pipelines across global prestige brands."
     verbose = {"requirements": {"source/0": {
         "importance": "responsibility",
@@ -498,14 +498,11 @@ def test_parser_retries_word_by_word_criteria():
             for word in source.rstrip(".").split()
         ],
     }}}
-    concise = {"requirements": {"source/0": {
-        "importance": "responsibility",
-        "criteria": [{"text": source, "kind": "general", "options": []}],
-    }}}
-    llm, calls = fake_llm([verbose, concise])
+    llm, calls = fake_llm([verbose])
     parsed = parse_job(llm, source)
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert len(parsed.requirements[0].criteria) == 1
+    assert parsed.requirements[0].criteria[0].text == source
 
 
 def test_parser_retries_missing_labeled_responsibility():
@@ -525,20 +522,47 @@ def test_parser_retries_missing_labeled_responsibility():
     assert len(calls) == 2
 
 
-def test_parser_rejects_ordinary_words_as_technologies():
+def test_parser_converts_ordinary_capabilities_to_general_criteria():
     bad = {"requirements": {"source/0": {
         "importance": "required",
         "criteria": [{"text": "training", "kind": "technology",
                       "options": ["training"]}],
     }}}
-    good = {"requirements": {"source/0": {
+    llm, calls = fake_llm([bad])
+    criterion = parse_job(llm, "Automated training").requirements[0].criteria[0]
+    assert criterion.kind == "general"
+    assert criterion.text == "Automated training"
+    assert len(calls) == 1
+
+
+def test_parser_keeps_named_tools_when_model_adds_function_words_and_capabilities():
+    source = "Build training pipelines using Databricks and MLflow."
+    response = {"requirements": {"source/0": {
         "importance": "required",
-        "criteria": [{"text": "Automated training", "kind": "general",
-                      "options": []}],
+        "criteria": [
+            {"text": "using", "kind": "general", "options": []},
+            {"text": "training", "kind": "technology",
+             "options": ["training", "Databricks", "and", "MLflow"]},
+        ],
     }}}
-    llm, calls = fake_llm([bad, good])
-    assert parse_job(llm, "Automated training").requirements[0].criteria[0].kind == "general"
-    assert len(calls) == 2
+    llm, calls = fake_llm([response])
+    criteria = parse_job(llm, source).requirements[0].criteria
+    assert len(calls) == 1
+    assert [item.options for item in criteria if item.kind == "technology"] == [
+        ["Databricks", "MLflow"],
+    ]
+    assert [item.text for item in criteria if item.kind == "general"] == ["training"]
+
+
+def test_parser_still_rejects_function_words_as_only_criterion():
+    response = {"requirements": {"source/0": {
+        "importance": "required",
+        "criteria": [{"text": "using", "kind": "general", "options": []}],
+    }}}
+    llm, calls = fake_llm([response] * 3)
+    with pytest.raises(ModelOutputError, match="no assessable criteria"):
+        parse_job(llm, "Build Python services using Docker.")
+    assert len(calls) == 3
 
 
 def test_parse_job_retries_invalid_options_with_validation_feedback():
