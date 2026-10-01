@@ -299,6 +299,43 @@ def test_fully_supported_summary_is_exported(setup):
     assert calls[1][1]["format"]["properties"]["verdicts"]["required"] == ["summary/0"]
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The candidate develops Python pipelines.",
+        "I build pipelines. The candidate also develops Python pipelines.",
+    ],
+)
+def test_supported_summary_with_changed_voice_keeps_source(setup, text):
+    draft = proposal(ORIGINALS)
+    draft["summary_sentences"] = [
+        {"id": "summary/0", "source_ids": [IDS[0]], "text": text}
+    ]
+    result, report, diagnostics, _ = run(
+        setup, [draft, verdicts(["summary/0"])], description="Python role"
+    )
+    assert result.summary == setup[0].summary
+    assert diagnostics.summary_fallback
+    audit = next(a for a in report.rewrites if a.target_id == "summary")
+    assert audit.status == "rejected"
+    assert audit.exported == setup[0].summary
+    assert "first-person voice" in audit.reason
+
+
+def test_summary_sentences_can_share_first_person_voice(setup):
+    draft = proposal(ORIGINALS)
+    draft["summary_sentences"] = [
+        {"id": "summary/0", "source_ids": [IDS[0]], "text": "I build pipelines."},
+        {"id": "summary/1", "source_ids": [IDS[1]], "text": "SQL reports are my focus."},
+    ]
+    result, _, diagnostics, _ = run(
+        setup, [draft, verdicts(["summary/0", "summary/1"])],
+        description="Python role",
+    )
+    assert result.summary == "I build pipelines. SQL reports are my focus."
+    assert not diagnostics.summary_fallback
+
+
 def test_mechanically_rejected_summary_gets_focused_retry(setup):
     draft = proposal(ORIGINALS)
     draft["summary_sentences"] = [
@@ -336,6 +373,37 @@ def test_mechanically_rejected_summary_gets_focused_retry(setup):
         == r"^[^0-9]*\S[^0-9]*$"
     )
     assert calls[2][1]["format"]["properties"]["verdicts"]["required"] == ["summary/0"]
+
+
+def test_supported_third_person_retry_keeps_source_summary(setup):
+    draft = proposal(ORIGINALS)
+    draft["summary_sentences"] = [
+        {
+            "id": "summary/0",
+            "source_ids": [IDS[0]],
+            "text": "I have 9+ years of experience.",
+        },
+    ]
+    retry = {
+        "summary_sentences": [
+            {
+                "id": "summary/0",
+                "source_ids": [IDS[0]],
+                "text": "The candidate builds Python pipelines.",
+            },
+        ]
+    }
+    result, report, diagnostics, calls = run(
+        setup, [draft, retry], description="Python role"
+    )
+    assert result.summary == setup[0].summary
+    assert diagnostics.summary_fallback
+    assert len(calls) == 2
+    assert [
+        audit.status for audit in report.rewrites if audit.target_id == "summary"
+    ] == ["rejected", "rejected"]
+    assert "first-person voice" in report.rewrites[-1].reason
+    assert report.rewrites[-1].exported == setup[0].summary
 
 
 def test_retry_rejection_keeps_original_summary_and_bullets(setup):

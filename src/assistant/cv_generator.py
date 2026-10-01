@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 MODEL = "gemma4:e2b-it-qat"
 # Source CV + job description + full JSON reply exceeds Ollama's default window.
-CONTEXT_TOKENS = 16384
+CONTEXT_TOKENS = 20000
 # Models that answer with an empty string when reasoning is switched off.
 REASONING_REQUIRED = ("gpt-oss",)
 MAX_SKILLS = 14

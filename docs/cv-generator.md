@@ -89,7 +89,7 @@ Run `uv run job-assistant generate --help` for all options.
 
 | Option | Purpose |
 |---|---|
-| `--model NAME` | Choose an installed Ollama model; default `granite4.2:3b` |
+| `--model NAME` | Choose an installed Ollama model; default `gemma4:e2b-it-qat` |
 | `--rubric FILE` | Override weights, e.g. `{"required_weight": 4, "partial_credit": 0.25}` |
 | `--job-cache DIR` | Parsed-job cache; default `output/job-requirements/` |
 | `--refresh-job-analysis` | Reparse the job and refresh matching |

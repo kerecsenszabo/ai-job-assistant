@@ -26,12 +26,14 @@ ollama serve
 Then, from the repository root:
 
 ```bash
-ollama pull granite4.2:3b
+ollama pull gemma4:e2b-it-qat
 mkdir -p data/job_descriptions
 ```
 
 The same default model serves generation and chat. Use `--model` to choose
-another installed model. Start with the 3B default; 16GB+ RAM is recommended.
+another installed model. The default is `gemma4:e2b-it-qat`; 8GB+ RAM is
+recommended. For less memory, select a smaller installed model such as
+`granite4.2:3b`.
 The chat embedding model downloads on first use, and Tectonic may download
 resources on the first PDF export.
 
@@ -107,7 +109,7 @@ need review.
 uv run job-assistant benchmark models
 uv run job-assistant benchmark run \
   --cv output/cv.source.json --jobs data/job_descriptions/target.txt \
-  --models granite4.2:3b qwen3.5:4b-q4_K_M --pull
+  --models gemma4:e2b-it-qat granite4.2:3b --pull
 uv run job-assistant benchmark report
 ```
 
@@ -115,7 +117,9 @@ Benchmarks retain timing, failures, evidence decisions and generated outputs in
 `output/benchmarks.sqlite`. Prefer a reviewed source JSON so every model
 uses the same facts. PDF input also works: the first selected model imports it
 once, outside the measured tailoring cases. Match coverage is not a model-quality
-score or a hiring probability.
+score or a hiring probability. Without `--models`, the runner compares the
+curated suite shown by `benchmark models`; `--pull` downloads missing models.
+Benchmark responses are capped at 4096 tokens (generation and chat are not).
 
 Historical benchmark databases are not migrated; use `--database` with a new
 file if an existing database has an unsupported schema. The previous

@@ -1718,6 +1718,10 @@ def select_evidence(report: TailoringReport) -> list[EvidenceItem]:
 
 
 NUMBERS = re.compile(r"(?<!\w)\d+(?:[.,]\d+)*(?:%|\+)?")
+FIRST_PERSON = re.compile(
+    r"\b(?:I|[Mm]e|[Mm]y|[Mm]ine|[Ww]e|[Uu]s|[Oo]ur|[Oo]urs)\b"
+)
+THIRD_PERSON_CANDIDATE = re.compile(r"\bthe (?:candidate|applicant)\b", re.IGNORECASE)
 
 
 def mechanical_rejection(sentence: DraftSentence, sources: list[EvidenceItem]) -> str:
@@ -1734,6 +1738,14 @@ def mechanical_rejection(sentence: DraftSentence, sources: list[EvidenceItem]) -
         prefix = CLIENT_PREFIX.match(sources[0].text)
         if prefix and not sentence.text.startswith(prefix.group()):
             return "The rewrite removed or changed an original context prefix."
+    return ""
+
+
+def summary_voice_rejection(original: str, proposed: str) -> str:
+    if FIRST_PERSON.search(original) and (
+        not FIRST_PERSON.search(proposed) or THIRD_PERSON_CANDIDATE.search(proposed)
+    ):
+        return "Summary changed the source's first-person voice."
     return ""
 
 
@@ -2186,6 +2198,19 @@ def rewrite(
                 verdict.reason,
             )
 
+    voice_rejection = (
+        summary_voice_rejection(cv.summary, " ".join(item.text for item in summaries))
+        if summaries
+        else ""
+    )
+    if voice_rejection:
+        summary_invalid = True
+        for audit in audits:
+            if audit.target_id == "summary" and audit.status == "accepted":
+                audit.status = "rejected"
+                audit.reason = voice_rejection
+                audit.exported = cv.summary
+
     accepted_summary = (
         bool(summaries)
         and not summary_invalid
@@ -2229,6 +2254,7 @@ def rewrite(
                 "the supplied candidate evidence. The job is context, not evidence. "
                 "Do not include digits, numerical claims, years of experience, "
                 "production use, ownership or uncited tools. "
+                "Preserve the original summary's first-person voice. "
                 "If the original summary is already strong, make a subtle supported "
                 "refinement or retain its wording; otherwise highlight the most "
                 "relevant supported strength. Address the prior failure without "
@@ -2261,7 +2287,9 @@ def rewrite(
                 or len(sentence.source_ids) != len(set(sentence.source_ids))
             ):
                 raise ModelOutputError("Summary retry has invalid evidence citations.")
-            rejection = mechanical_rejection(
+            rejection = summary_voice_rejection(
+                cv.summary, sentence.text
+            ) or mechanical_rejection(
                 sentence, [originals[sid] for sid in sentence.source_ids]
             )
             if rejection:
