@@ -41,6 +41,11 @@ The job describes what to emphasize, never new candidate facts. The pipeline:
    claim review and mechanical checks reject unsupported numbers, named terms,
    ownership, scale and prototype-to-production upgrades. Rejected or unclear
    wording retains the original, with a visible warning and audit entry.
+   When a proposed summary fails the mechanical checks, one focused summary-only
+   retry uses the rejection reasons and cited candidate evidence. It is checked
+   and reviewed by the same safeguards; if still unsupported, the original
+   summary remains. Supported summaries may be retained or subtly adapted to
+   the role rather than replaced wholesale.
 
 Without a job, all sections and bullets remain, experience wording is polished,
 and the summary is unchanged. Both modes preserve contact details, employers,
@@ -96,6 +101,11 @@ Rubric overrides and refresh options require `--job`. Rubric weights must be
 positive and `partial_credit` must be between 0 and 1.
 
 Job analyses are shared across CV edits and models for a consistent rubric.
+Repeated headings and soft-wrapped lines are normalized before extraction;
+known benefits sections are excluded. Labeled requirements and responsibilities
+must be covered, and obvious word-by-word or non-technology criteria are rejected
+rather than scored. Existing job-analysis caches created before these parsing changes
+require `--refresh-job-analysis`.
 Matching-cache keys include the CV, job, parsed criteria, rubric, installed model
 digest, inference settings and analysis version. Changed inputs invalidate
 matching; rewriting still runs. Corrupt/incompatible records require explicit

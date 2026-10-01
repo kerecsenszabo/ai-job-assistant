@@ -15,13 +15,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 if TYPE_CHECKING:
     from assistant.cv_tailoring import ParsedJob
 
-CACHE_VERSION = 1
+CACHE_VERSION = 5
 
 
 class _CacheRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    cache_version: Literal[1]
+    cache_version: Literal[5]
     schema_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     description_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     parsed_job: dict[str, object]
@@ -63,7 +63,8 @@ def get_parsed_job(
 
     schema_hash = hashlib.sha256(
         json.dumps(
-            ParsedJob.model_json_schema(), sort_keys=True, separators=(",", ":")
+            {"version": CACHE_VERSION, "schema": ParsedJob.model_json_schema()},
+            sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
     ).hexdigest()
     cache_path = cache_dir / f"{fingerprint}.json"

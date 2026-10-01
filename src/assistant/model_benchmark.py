@@ -18,12 +18,12 @@ DEFAULT_DATABASE = Path("output/benchmarks.sqlite")
 DEFAULT_JOB_CACHE = Path("output/job-requirements")
 MODEL_SUITE = (
     ("qwen3.5:0.8b", "1.0 GB", "basic"),
+    ("lfm2.5-thinking:1.2b", "731 MB", "basic challenger"),
     ("granite4.2:3b", "2.2 GB", "baseline"),
-    ("qwen3.5:2b-q4_K_M", "1.9 GB", "candidate"),
-    ("qwen3.5:4b-q4_K_M", "3.4 GB", "candidate"),
-    ("ministral-3:3b-instruct-2512-q4_K_M", "3.0 GB", "candidate"),
-    ("gemma4:e2b-it-qat", "4.3 GB", "candidate"),
-    ("phi4-mini:3.8b-q4_K_M", "2.5 GB", "candidate"),
+    ("qwen3.5:2b-q4_K_M", "1.9 GB", "challenger"),
+    ("openbmb/minicpm5-2b:2b", "1.6 GB", "priority challenger"),
+    ("nemotron-3-nano:4b", "2.8 GB", "challenger"),
+    ("gemma4:e2b-it-qat", "4.3 GB", "current winner"),
 )
 
 

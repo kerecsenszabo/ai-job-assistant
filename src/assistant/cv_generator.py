@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 if TYPE_CHECKING:
     from assistant.cv_tailoring import TailoringReport
 
-MODEL = "granite4.2:3b"
+MODEL = "gemma4:e2b-it-qat"
 # Source CV + job description + full JSON reply exceeds Ollama's default window.
 CONTEXT_TOKENS = 16384
 # Models that answer with an empty string when reasoning is switched off.
@@ -533,7 +533,7 @@ def main(argv: list[str] | None = None) -> None:
             f"{report.match_percent:.1f}%"
             if report.match_percent is not None else "insufficient information"
         )
-        print(f"CV-evidenced job match: {match} (not a hiring probability)")
+        print(f"CV-evidenced job match: {match}")
         if report.must_have_percent is not None:
             print(f"Must-have coverage: {report.must_have_percent:.1f}%")
         if report.unresolved_eligibility_ids:

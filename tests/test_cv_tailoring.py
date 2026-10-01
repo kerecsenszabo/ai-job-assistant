@@ -17,6 +17,7 @@ from assistant.cv_tailoring import (
     CriterionMatch,
     ScoringRubric,
     TailoringReport,
+    assessable_job_lines,
     checked_matches,
     enforce_match_rules,
     explicit_criterion_match,
@@ -25,6 +26,7 @@ from assistant.cv_tailoring import (
     match_job,
     mechanical_rejection,
     parse_job,
+    prepare_job_description,
     polish_with_report,
     request,
     score_matches,
@@ -400,6 +402,145 @@ def test_parse_job_accepts_non_assessable_source_lines():
     assert parse_job(llm, "Employee benefits").requirements == []
 
 
+def test_parser_excludes_headings_and_benefits_but_keeps_later_requirements():
+    description = (
+        "The Position\n"
+        "Own production ML systems.\n"
+        "You Will Have an Opportunity to\n"
+        "Build data pipelines.\n"
+        "What We Are Looking For\n"
+        "Strong Python skills.\n"
+        "Why You'll Love Working Here\n"
+        "Innovative Environment: work with cutting-edge technology.\n"
+        "Professional Growth: develop your career.\n"
+        "Responsibilities\n"
+        "Maintain production models.\n"
+    )
+    expected = [
+        "Own production ML systems.",
+        "Build data pipelines.",
+        "Strong Python skills.",
+        "Maintain production models.",
+    ]
+    assert assessable_job_lines(description) == expected
+
+    def respond(prompt, **kwargs):
+        sources = json.loads(prompt.to_messages()[-1].content)["source_lines"]
+        return json.dumps({"requirements": {
+            source_id: {
+                "importance": "required",
+                "criteria": [{"text": text, "kind": "general", "options": []}],
+            }
+            for source_id, text in sources.items()
+        }})
+
+    parsed = parse_job(RunnableLambda(respond), description)
+    assert [item.quote for item in parsed.requirements] == expected
+    assert parsed.requirements[-1].importance == "responsibility"
+
+
+def test_parser_skips_benefits_only_job_without_model_calls():
+    llm, calls = fake_llm([])
+    parsed = parse_job(
+        llm, "Why You'll Love Working Here\nProfessional Growth: learn new skills."
+    )
+    assert parsed.requirements == []
+    assert not calls
+
+
+def test_parser_restores_wrapped_requirements_and_excludes_repeated_benefits():
+    description = (
+        "Responsibilities Responsibilities Responsibilities Responsibilities\n"
+        "Build global demand forecasting systems across\n"
+        "prestige beauty brands, using Spark and\n"
+        "Delta Lake on Databricks.\n"
+        "Requirements Requirements Requirements Requirements\n"
+        "Programming & Tooling Programming & Tooling Programming & Tooling "
+        "Programming & Tooling: Expert in Python and\n"
+        "scikit-learn for production models.\n"
+        "Our hybrid work model Our hybrid work model Our hybrid work model "
+        "Our hybrid work model\n"
+        "Work from home up to 12 days per month.\n"
+        "Our Benefits Our Benefits Our Benefits Our Benefits\n"
+        "Private health insurance and training.\n"
+    )
+    expected = [
+        "Build global demand forecasting systems across prestige beauty brands, "
+        "using Spark and Delta Lake on Databricks.",
+        "Programming & Tooling: Expert in Python and scikit-learn for production models.",
+    ]
+    assert assessable_job_lines(description) == expected
+    assert "Responsibilities\n" in prepare_job_description(description)
+
+    def respond(prompt, **kwargs):
+        sources = json.loads(prompt.to_messages()[-1].content)["source_lines"]
+        return json.dumps({"requirements": {
+            source_id: {
+                "importance": "required",
+                "criteria": [{"text": text, "kind": "general", "options": []}],
+            }
+            for source_id, text in sources.items()
+        }})
+
+    parsed = parse_job(RunnableLambda(respond), description)
+    assert [item.quote for item in parsed.requirements] == expected
+    assert [item.importance for item in parsed.requirements] == [
+        "responsibility", "required",
+    ]
+
+
+def test_parser_retries_word_by_word_criteria():
+    source = "Build robust modular scalable machine learning pipelines across global prestige brands."
+    verbose = {"requirements": {"source/0": {
+        "importance": "responsibility",
+        "criteria": [
+            {"text": word, "kind": "general", "options": []}
+            for word in source.rstrip(".").split()
+        ],
+    }}}
+    concise = {"requirements": {"source/0": {
+        "importance": "responsibility",
+        "criteria": [{"text": source, "kind": "general", "options": []}],
+    }}}
+    llm, calls = fake_llm([verbose, concise])
+    parsed = parse_job(llm, source)
+    assert len(calls) == 2
+    assert len(parsed.requirements[0].criteria) == 1
+
+
+def test_parser_retries_missing_labeled_responsibility():
+    description = "Responsibilities\nBuild Python models.\nMaintain data pipelines."
+    response = {"requirements": {"source/0": {
+        "importance": "responsibility",
+        "criteria": [{"text": "Build Python models", "kind": "general", "options": []}],
+    }}}
+    complete = {"requirements": {"source/0": response["requirements"]["source/0"],
+                                  "source/1": {
+        "importance": "responsibility",
+        "criteria": [{"text": "Maintain data pipelines",
+                      "kind": "general", "options": []}],
+    }}}
+    llm, calls = fake_llm([response, complete])
+    assert len(parse_job(llm, description).requirements) == 2
+    assert len(calls) == 2
+
+
+def test_parser_rejects_ordinary_words_as_technologies():
+    bad = {"requirements": {"source/0": {
+        "importance": "required",
+        "criteria": [{"text": "training", "kind": "technology",
+                      "options": ["training"]}],
+    }}}
+    good = {"requirements": {"source/0": {
+        "importance": "required",
+        "criteria": [{"text": "Automated training", "kind": "general",
+                      "options": []}],
+    }}}
+    llm, calls = fake_llm([bad, good])
+    assert parse_job(llm, "Automated training").requirements[0].criteria[0].kind == "general"
+    assert len(calls) == 2
+
+
 def test_parse_job_retries_invalid_options_with_validation_feedback():
     llm, calls = fake_llm([keyed_requirement(["Rust"]), keyed_requirement()])
     parsed = parse_job(llm, "Python")
@@ -426,11 +567,11 @@ def test_long_job_parsing_preserves_original_section_priority():
     assert len(description) > 800
     aws = keyed_requirement(["AWS"])
     aws["requirements"]["source/0"]["criteria"][0]["text"] = "AWS"
-    llm, calls = fake_llm([
-        keyed_requirement(), {"requirements": {}}, aws,
-    ])
+    response = keyed_requirement()
+    response["requirements"]["source/1"] = aws["requirements"]["source/0"]
+    llm, calls = fake_llm([response])
     parsed = parse_job(llm, description)
-    assert len(calls) == 3
+    assert len(calls) == 1
     assert [item.id for item in parsed.requirements] == ["requirement/0", "requirement/1"]
     assert parsed.requirements[1].importance == "preferred"
     assert parsed.requirements[0].quote == first_line.strip()

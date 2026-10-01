@@ -127,6 +127,10 @@ class Draft(StrictModel):
     summary_sentences: list[object] = Field(default_factory=list)
 
 
+class SummaryDraft(StrictModel):
+    summary_sentences: list[object]
+
+
 class SentenceVerdict(StrictModel):
     id: str
     status: Literal["supported", "unsupported", "unclear"]
@@ -148,7 +152,7 @@ class RewriteAudit(StrictModel):
 
 
 class TailoringReport(StrictModel):
-    label: str = "CV-evidenced job match (not a hiring probability)"
+    label: str = "CV-evidenced job match"
     match_percent: float | None = None
     must_have_percent: float | None = None
     rubric: ScoringRubric = Field(default_factory=ScoringRubric)
@@ -286,10 +290,93 @@ SECTION_IMPORTANCE = (
      r"what you will do", "responsibility"),
 )
 
+JOB_SECTION_HEADINGS = (
+    r"(?:the |about the )?(?:position|role)|job description|"
+    r"you will have an opportunity to|"
+    r"why you(?:['\u2019]ll| will) love working here"
+)
+NON_REQUIREMENT_SECTIONS = (
+    r"why you(?:['\u2019]ll| will) love working here|"
+    r"(?:employee )?benefits(?: and perks)?|perks|"
+    r"what we offer|why join us|about us|company overview|"
+    r"our benefits|our hybrid work model"
+)
+
+
+def collapse_repeated_heading(line: str) -> str:
+    """Collapse copied page headings without changing the body of a requirement."""
+    prefix, separator, rest = line.partition(":")
+    words = prefix.split()
+    for width in range(1, len(words) // 2 + 1):
+        if len(words) % width == 0 and words == words[:width] * (len(words) // width):
+            candidate = " ".join(words[:width])
+            if is_job_heading(candidate) or (
+                separator and width >= 2 and len(words) // width >= 3
+            ):
+                return candidate + (separator + rest if separator else "")
+    return line
+
+
+def is_job_heading(line: str) -> bool:
+    heading = normalized(line).rstrip(":")
+    return bool(
+        re.fullmatch(NON_REQUIREMENT_SECTIONS, heading)
+        or re.fullmatch(JOB_SECTION_HEADINGS, heading)
+        or any(re.fullmatch(pattern, heading) for pattern, _ in SECTION_IMPORTANCE)
+    )
+
+
+def prepare_job_description(description: str) -> str:
+    """Restore soft-wrapped lines while retaining real section boundaries."""
+    lines: list[str] = []
+    for raw in description.splitlines():
+        line = collapse_repeated_heading(raw.strip())
+        if not line:
+            continue
+        if (
+            lines and not is_job_heading(line) and not is_job_heading(lines[-1])
+            and (
+                re.match(r"^[a-z(]", line)
+                or re.search(r"(?:[,;:]|\b(?:and|or|for|with|across|of|to|the))$", lines[-1])
+            )
+            and not lines[-1].endswith((".", "!", "?"))
+        ):
+            lines[-1] += ("" if lines[-1].endswith("-") else " ") + line
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def assessable_job_lines(description: str) -> list[str]:
+    """Exclude known non-job sections without discarding unsectioned postings."""
+    lines = []
+    excluded = False
+    for line in prepare_job_description(description).splitlines():
+        heading = normalized(line).rstrip(":")
+        if re.fullmatch(NON_REQUIREMENT_SECTIONS, heading):
+            excluded = True
+        elif re.fullmatch(JOB_SECTION_HEADINGS, heading) or any(
+            re.fullmatch(pattern, heading) for pattern, _ in SECTION_IMPORTANCE
+        ):
+            excluded = False
+        elif not excluded and line.strip():
+            lines.append(line.strip())
+    return lines
+
+
 OPTION_DESCRIPTORS = re.compile(
     r"\b(?:frameworks|orchestration|workflow|applications|fundamentals|"
     r"knowledge|concepts|experience|skills|proficiency|ecosystem|tools|apis)\b"
 )
+NON_TECHNOLOGY_OPTIONS = re.compile(
+    r"(?:and|or|for|with|using|that|the|in|to|of|global|resilient|"
+    r"automated|training|tuning|monitoring|versioning|evaluation|"
+    r"frameworks?|systems?|pipelines?|planning|forecasting|"
+    r"stakeholders?|scalable|scale|build|develop|design|models?|"
+    r"practices|best-in-class|multi-metric)",
+    re.IGNORECASE,
+)
+FUNCTION_WORDS = re.compile(r"(?:and|or|for|with|using|that|the|in|to|of)", re.IGNORECASE)
 REDUNDANT_DESCRIPTORS = re.compile(
     r"^(?:(?:leading )?ml frameworks|similar (?:tools|apis)|"
     r"working proficiency|ml ecosystem)$"
@@ -622,7 +709,7 @@ def job_extraction_schema(sources: dict[str, str]) -> dict:
                         **requirement["properties"],
                         "criteria": {
                             **requirement["properties"]["criteria"],
-                            "maxItems": word_count,
+                            "maxItems": min(12, word_count),
                             "items": criteria,
                         },
                     },
@@ -658,7 +745,8 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
         "explicit nice-to-haves are preferred. Include responsibilities too. "
         "For each requirement extract criteria covering EVERY assessable clause. "
         "Criteria inherit their parent's source line. Use "
-        "kind=technology for explicit named tools/frameworks, with options "
+        "kind=technology only for explicit named tools, products, libraries or "
+        "model families, with options "
         "containing only exact names from that quote. 'A, B, or C' means "
         "operator=any, NOT all; 'A and B' means all. Examples introduced by "
         "'e.g.' or 'such as' are alternatives unless explicitly all required. "
@@ -669,15 +757,37 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
         "clauses, such as seniority, testing, CI/CD, or ownership. Do not turn "
         "a single alternative list into separately required technologies. "
         "Keep text concise. Extract each source clause only once; do not repeat "
-        "requirements or criteria to fill the response. Stop after the last "
+        "requirements or criteria to fill the response. Never split a clause "
+        "into individual words or treat ordinary words as technology names. "
+        "Training, monitoring, forecasting, planning, pipelines and adjectives "
+        "are capabilities, not technology names. Never extract standalone "
+        "function words (and, with, using) as criteria. One general criterion "
+        "can cover a complete clause; do not fill every available schema slot. "
+        "Return no more than twelve meaningful criteria per source line. "
+        "Stop after the last "
         "requirement. Options must be exact substrings of the corresponding "
         "source line. General criteria should have empty options. "
         "If there are no assessable requirements return an empty object."
     )
+    prepared = prepare_job_description(description)
+    sectioned_lines = set()
+    in_section = False
+    for line in prepared.splitlines():
+        heading = normalized(line).rstrip(":")
+        if re.fullmatch(NON_REQUIREMENT_SECTIONS, heading):
+            in_section = False
+        elif any(re.fullmatch(pattern, heading) for pattern, _ in SECTION_IMPORTANCE):
+            in_section = True
+        elif re.fullmatch(JOB_SECTION_HEADINGS, heading):
+            in_section = False
+        elif in_section:
+            sectioned_lines.add(normalized(line))
     seen = set()
     unique = []
     requirements = []
-    for chunk in job_description_chunks(description):
+    for chunk in job_description_chunks("\n".join(assessable_job_lines(description))):
+        if not chunk:
+            continue
         sources = {
             f"source/{index}": line.strip()
             for index, line in enumerate(chunk.splitlines()) if line.strip()
@@ -694,7 +804,46 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
                     transform_response=lambda response: source_requirement_quotes(response, sources),
                     stage="job_parsing",
                 )
+                keyed = not job.requirements or all(
+                    item.id.startswith("source/") for item in job.requirements
+                )
+                missing = [
+                    quote for quote in sources.values()
+                    if keyed and normalized(quote) in sectioned_lines
+                    and not any(
+                        normalized(item.quote) in normalized(quote)
+                        for item in job.requirements
+                    )
+                ]
+                if missing:
+                    raise ModelOutputError(
+                        "Missing assessable lines under a requirements or "
+                        f"responsibilities heading: {missing!r}."
+                    )
                 for requirement in job.requirements:
+                    if len(requirement.criteria) > 12 or sum(
+                        item.kind == "general" and len(item.text.split()) == 1
+                        for item in requirement.criteria
+                    ) >= 3:
+                        raise ModelOutputError(
+                            "A source line has too many criteria or standalone "
+                            "words; combine related words into meaningful clauses."
+                        )
+                    for criterion in requirement.criteria:
+                        if (
+                            criterion.kind == "general"
+                            and FUNCTION_WORDS.fullmatch(criterion.text.strip())
+                        ) or (
+                            criterion.kind == "technology"
+                            and any(
+                                NON_TECHNOLOGY_OPTIONS.fullmatch(option.strip())
+                                for option in criterion.options
+                            )
+                        ):
+                            raise ModelOutputError(
+                                "A function word or ordinary capability was "
+                                "extracted as a standalone criterion or technology."
+                            )
                     normalize_criteria(requirement)
                 break
             except ModelOutputError as exc:
@@ -703,22 +852,23 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
                 feedback = (
                     "\nThe previous extraction failed validation: "
                     f"{exc}\nRegenerate the extraction using only the supplied "
-                    "source lines. Do not invent options. Return an empty "
-                    "requirements object or null entries for non-assessable lines."
+                    "source lines. Do not invent options. Include all assessable "
+                    "lines under labeled requirements or responsibilities sections. "
+                    "Use null only for non-assessable lines."
                 )
         for requirement in job.requirements:
             if normalized(requirement.quote) not in normalized(chunk):
                 raise ValueError("A parsed job requirement has no valid source quote.")
         requirements.extend(job.requirements)
     for requirement in requirements:
-        if normalized(requirement.quote) not in normalized(description):
+        if normalized(requirement.quote) not in normalized(prepared):
             raise ValueError("A parsed job requirement has no valid source quote.")
         key = normalized(requirement.text)
         if key not in seen:
             seen.add(key)
             requirement = requirement.model_copy(update={
                 "id": f"requirement/{len(unique)}",
-                "importance": source_importance(description, requirement),
+                "importance": source_importance(prepared, requirement),
             })
             requirement = requirement.model_copy(update={
                 "criteria": normalize_criteria(requirement),
@@ -1423,6 +1573,7 @@ def rewrite(
             item.model_dump() for item in selected
         ] + [item.model_dump() for item in report.evidence if item.section == "summary"],
     }
+    summary_sources = {item["id"] for item in data["summary_evidence"]}
     raw_draft: list[str] = []
     raw_review: list[str] = []
     problems: list[str] = []
@@ -1430,6 +1581,7 @@ def rewrite(
     candidates: list[DraftSentence] = []
     summaries: list[DraftSentence] = []
     summary_invalid = False
+    summary_mechanical_rejection = False
 
     def record_audit(target: str, sources: list[str], proposed: str, status: str, reason: str):
         original = cv.summary if target == "summary" else originals[target].text
@@ -1469,7 +1621,11 @@ def rewrite(
                 "source_ids from summary_evidence. All "
                 "claims must be fully supported by those citations; do not infer "
                 "leadership, experience duration, expertise or production deployment. "
-                "Preserve the original summary voice. Never mention the hiring company."
+                "Preserve the original summary voice. If it already fits the role, "
+                "make only a subtle, useful change or keep it; otherwise rewrite "
+                "it to emphasize supported, relevant strengths. Do not insert job "
+                "keywords without citing candidate evidence for each claim. "
+                "Never mention the hiring company."
                 if description is not None
                 else "Return an empty summary_sentences list."
             ),
@@ -1519,7 +1675,6 @@ def rewrite(
         allowed = {item.id for item in targets}
         for target in grouped.keys() - allowed - {"summary"}:
             problems.append(f"Unexpected rewrite target: {target}.")
-        summary_sources = {item["id"] for item in data["summary_evidence"]}
         if len(grouped.get("summary", [])) > 4:
             summary_invalid = True
             problems.append("The proposed summary exceeds four sentences.")
@@ -1571,6 +1726,7 @@ def rewrite(
                     record_audit(target, sentence.source_ids, sentence.text, "rejected", rejection)
                     report.invalid_rewrite_response = raw_draft[-1] if raw_draft else draft.model_dump_json()
                     summary_invalid |= target == "summary"
+                    summary_mechanical_rejection |= target == "summary"
                 elif target != "summary" and sentence.text == originals[target].text:
                     record_audit(target, sentence.source_ids, sentence.text, "accepted", "Unchanged source.")
                 else:
@@ -1649,6 +1805,116 @@ def rewrite(
     accepted_summary = bool(summaries) and not summary_invalid and all(
         entry.status == "accepted" for entry in audits if entry.target_id == "summary"
     )
+    if description is not None and summary_mechanical_rejection and summary_sources:
+        retry_audits: list[RewriteAudit] = []
+        retry_raw: list[str] = []
+        retry_review_started = False
+        retry_schema = {
+            "type": "object", "additionalProperties": False,
+            "required": ["summary_sentences"],
+            "properties": {
+                "summary_sentences": {
+                    **rewrite_schema([], sorted(summary_sources), True)["properties"]["summary_sentences"],
+                    "minItems": 1, "maxItems": 1,
+                },
+            },
+        }
+        retry_schema["properties"]["summary_sentences"]["items"]["properties"]["text"] = {
+            "type": "string", "minLength": 1, "pattern": r"^[^0-9]*\S[^0-9]*$",
+        }
+        try:
+            retry = request(
+                llm, SummaryDraft,
+                "The previous proposed summary was not fully supported or was missing. "
+                "Propose ONE concise summary sentence with id summary/0, citing only "
+                "the supplied candidate evidence. The job is context, not evidence. "
+                "Do not include digits, numerical claims, years of experience, "
+                "production use, ownership or uncited tools. "
+                "If the original summary is already strong, make a subtle supported "
+                "refinement or retain its wording; otherwise highlight the most "
+                "relevant supported strength. Address the prior failure without "
+                "copying unsupported claims.",
+                {
+                    "job_description": description,
+                    "original_summary": cv.summary,
+                    "summary_evidence": data["summary_evidence"],
+                    "previous_failures": [
+                        audit.reason
+                        for audit in audits if audit.target_id == "summary"
+                        and audit.status != "accepted"
+                    ],
+                },
+                json_schema=retry_schema,
+                transform_response=lambda response: capture_rewrite_response(retry_raw, response),
+                stage="rewriting",
+            )
+            if len(retry.summary_sentences) != 1:
+                raise ModelOutputError("Summary retry must contain one sentence.")
+            value = retry.summary_sentences[0]
+            sentence = DraftSentence.model_validate(
+                {**value, "target_id": "summary"} if isinstance(value, dict) else value
+            )
+            if (
+                sentence.id != "summary/0"
+                or not set(sentence.source_ids) <= summary_sources
+                or len(sentence.source_ids) != len(set(sentence.source_ids))
+            ):
+                raise ModelOutputError("Summary retry has invalid evidence citations.")
+            rejection = mechanical_rejection(
+                sentence, [originals[sid] for sid in sentence.source_ids]
+            )
+            if rejection:
+                retry_audits.append(record_audit(
+                    "summary", sentence.source_ids, sentence.text, "rejected", rejection
+                ))
+            elif sentence.text == cv.summary and sentence.source_ids == ["summary/0"]:
+                retry_audits.append(record_audit(
+                    "summary", sentence.source_ids, sentence.text, "accepted", "Unchanged source."
+                ))
+            else:
+                retry_review_started = True
+                review = request(
+                    llm, Review,
+                    "Independently check EVERY claim in this summary against ONLY "
+                    "its cited candidate evidence. Supported requires every claim "
+                    "to be explicitly entailed; reject altered or invented facts.",
+                    {"entries": [{
+                        "sentence": sentence.model_dump(),
+                        "sources": [originals[sid].model_dump() for sid in sentence.source_ids],
+                    }]},
+                    json_schema=rewrite_review_schema([sentence.id]),
+                    transform_response=lambda response: capture_rewrite_response(raw_review, response),
+                    stage="rewrite_review",
+                )
+                if set(review.verdicts) != {sentence.id}:
+                    raise ModelOutputError("Summary retry review must cover exactly one sentence.")
+                value = review.verdicts[sentence.id]
+                if not isinstance(value, dict):
+                    raise ModelOutputError("Summary retry review has an invalid verdict.")
+                verdict = SentenceVerdict.model_validate({**value, "id": sentence.id})
+                status = {
+                    "supported": "accepted", "unsupported": "rejected", "unclear": "unclear"
+                }[verdict.status]
+                retry_audits.append(record_audit(
+                    "summary", sentence.source_ids, sentence.text, status, verdict.reason
+                ))
+        except (ModelOutputError, ValidationError) as exc:
+            if retry_review_started and raw_review:
+                report.invalid_review_response = raw_review[-1]
+            elif retry_raw:
+                report.invalid_rewrite_response = retry_raw[-1]
+            problems.append(f"Summary retry failed: {exc}")
+        if retry_audits and retry_audits[0].status == "accepted":
+            summaries = [sentence]
+            accepted_summary = True
+            for audit in audits:
+                if audit not in retry_audits and audit.target_id == "summary" and audit.status == "accepted":
+                    audit.status = "unclear"
+                    audit.reason = "Superseded by the accepted summary retry."
+                    audit.exported = cv.summary
+        elif retry_audits:
+            for audit in retry_audits:
+                audit.exported = cv.summary
     output_bullets = {entry.target_id: entry.exported for entry in audits if entry.target_id != "summary"}
     summary = " ".join(item.text for item in summaries) if accepted_summary else cv.summary
     if description is not None and not accepted_summary:
