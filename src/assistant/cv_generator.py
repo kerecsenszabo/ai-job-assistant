@@ -40,7 +40,7 @@ class TailorDiagnostics:
     report: TailoringReport | None = None
 
 
-def local_llm(model: str) -> ChatOllama:
+def local_llm(model: str, *, num_predict: int | None = None) -> ChatOllama:
     """Local LLM with room for a full CV round-trip.
 
     Uses the chat endpoint, and leaves reasoning at the model default for
@@ -52,6 +52,7 @@ def local_llm(model: str) -> ChatOllama:
         reasoning=None if model.startswith(REASONING_REQUIRED) else False,
         temperature=0,
         num_ctx=CONTEXT_TOKENS,
+        num_predict=num_predict,
     )
 
 

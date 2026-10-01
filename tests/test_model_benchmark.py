@@ -128,14 +128,23 @@ def test_benchmark_one_collects_output_audit_and_uses_job_cache(tmp_path, monkey
     cache = tmp_path / "jobs"
     calls = []
 
-    def tailor(source, description, *, model, diagnostics, job_cache, refresh_job_analysis):
-        calls.append((source, description, model, job_cache, refresh_job_analysis))
+    def tailor(
+        source, description, *, model, llm, diagnostics, job_cache,
+        refresh_job_analysis,
+    ):
+        calls.append((
+            source, description, model, llm.num_predict, job_cache,
+            refresh_job_analysis,
+        ))
         diagnostics.report = report
         return source
 
     monkeypatch.setattr(benchmark, "tailor_cv", tailor)
     measured = benchmark.benchmark_one("run", "local-model", job, 2, cv, job_cache=cache)
-    assert calls == [(cv, "Python required", "local-model", cache, False)]
+    assert calls == [(
+        cv, "Python required", "local-model", benchmark.MAX_OUTPUT_TOKENS,
+        cache, False,
+    )]
     assert measured.status == "ok"
     assert measured.output_json == cv.model_dump_json()
     assert measured.total_seconds >= 0
@@ -164,7 +173,10 @@ def test_failed_benchmark_preserves_error_and_available_audit(
     job = tmp_path / "job.txt"
     job.write_text("Python")
 
-    def fail(source, description, *, model, diagnostics, job_cache, refresh_job_analysis):
+    def fail(
+        source, description, *, model, llm, diagnostics, job_cache,
+        refresh_job_analysis,
+    ):
         diagnostics.report = report if with_report else None
         raise RuntimeError("generation failed")
 

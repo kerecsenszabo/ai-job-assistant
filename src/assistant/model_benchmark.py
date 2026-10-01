@@ -11,11 +11,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from assistant.cv_generator import CV, TailorDiagnostics, load_cv, tailor_cv
+from assistant.cv_generator import CV, TailorDiagnostics, load_cv, local_llm, tailor_cv
 from assistant.cv_parser import read_document
 
 DEFAULT_DATABASE = Path("output/benchmarks.sqlite")
 DEFAULT_JOB_CACHE = Path("output/job-requirements")
+MAX_OUTPUT_TOKENS = 4096
 MODEL_SUITE = (
     ("qwen3.5:0.8b", "1.0 GB", "basic"),
     ("lfm2.5-thinking:1.2b", "731 MB", "basic challenger"),
@@ -225,6 +226,7 @@ def benchmark_one(
             cv,
             job_description,
             model=model,
+            llm=local_llm(model, num_predict=MAX_OUTPUT_TOKENS),
             diagnostics=diagnostics,
             job_cache=job_cache,
             refresh_job_analysis=refresh_job_analysis,
