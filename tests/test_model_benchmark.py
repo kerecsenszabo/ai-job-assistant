@@ -82,6 +82,7 @@ def test_benchmark_defaults_use_fresh_product_database(command):
     if command == "run":
         assert args.repeat == 1
         assert str(args.job_cache) == "output/job-requirements"
+        assert not args.refresh_job_analysis
 
 
 def test_unsupported_schema_is_rejected_without_modifying_archive(tmp_path):
@@ -127,14 +128,14 @@ def test_benchmark_one_collects_output_audit_and_uses_job_cache(tmp_path, monkey
     cache = tmp_path / "jobs"
     calls = []
 
-    def tailor(source, description, *, model, diagnostics, job_cache):
-        calls.append((source, description, model, job_cache))
+    def tailor(source, description, *, model, diagnostics, job_cache, refresh_job_analysis):
+        calls.append((source, description, model, job_cache, refresh_job_analysis))
         diagnostics.report = report
         return source
 
     monkeypatch.setattr(benchmark, "tailor_cv", tailor)
     measured = benchmark.benchmark_one("run", "local-model", job, 2, cv, job_cache=cache)
-    assert calls == [(cv, "Python required", "local-model", cache)]
+    assert calls == [(cv, "Python required", "local-model", cache, False)]
     assert measured.status == "ok"
     assert measured.output_json == cv.model_dump_json()
     assert measured.total_seconds >= 0
@@ -163,7 +164,7 @@ def test_failed_benchmark_preserves_error_and_available_audit(
     job = tmp_path / "job.txt"
     job.write_text("Python")
 
-    def fail(source, description, *, model, diagnostics, job_cache):
+    def fail(source, description, *, model, diagnostics, job_cache, refresh_job_analysis):
         diagnostics.report = report if with_report else None
         raise RuntimeError("generation failed")
 
@@ -197,8 +198,11 @@ def test_benchmark_matrix_persists_successes_and_failures(
     monkeypatch.setattr(benchmark, "unload_model", unloaded.append)
     cases = []
 
-    def run_case(run_id, model, job, repetition, source, *, job_cache):
-        cases.append((model, job.name, repetition, source, job_cache))
+    def run_case(
+        run_id, model, job, repetition, source, *,
+        job_cache, refresh_job_analysis,
+    ):
+        cases.append((model, job.name, repetition, source, job_cache, refresh_job_analysis))
         measured = replace(
             result(cv, **benchmark.report_metrics(TailorDiagnostics(report=report))),
             run_id=run_id, model=model, job=job.name, repetition=repetition,
@@ -211,11 +215,14 @@ def test_benchmark_matrix_persists_successes_and_failures(
 
     monkeypatch.setattr(benchmark, "benchmark_one", run_case)
     benchmark.run_benchmark(args)
-    assert [(model, job, repetition) for model, job, repetition, _, _ in cases] == [
+    assert [(model, job, repetition) for model, job, repetition, _, _, _ in cases] == [
         (model, job.name, repetition)
         for model in ["first", "second"] for job in jobs for repetition in [1, 2]
     ]
-    assert all(source == cv and cache == args.job_cache for _, _, _, source, cache in cases)
+    assert all(
+        source == cv and cache == args.job_cache and not refresh
+        for _, _, _, source, cache, refresh in cases
+    )
     assert unloaded == ["first", "second"]
     with sqlite3.connect(database) as connection:
         assert connection.execute(
@@ -224,6 +231,56 @@ def test_benchmark_matrix_persists_successes_and_failures(
         assert connection.execute(
             "SELECT model, model_id FROM benchmark_models ORDER BY model"
         ).fetchall() == [("first", "digest-1"), ("second", "digest-2")]
+
+
+def test_refreshes_each_job_until_success_then_reuses_analysis(
+    tmp_path, monkeypatch, cv,
+):
+    jobs = [tmp_path / "first.txt", tmp_path / "second.txt"]
+    for job in jobs:
+        job.write_text("Python required")
+    args = benchmark.parse_args([
+        "run", "--cv", str(tmp_path / "cv.json"),
+        "--jobs", *(str(job) for job in jobs), "--models", "first", "second",
+        "--repeat", "2", "--database", str(tmp_path / "benchmark.sqlite"),
+        "--refresh-job-analysis",
+    ])
+    monkeypatch.setattr(
+        benchmark, "installed_model_info",
+        lambda: {"first": ("digest-1", "1 GB"), "second": ("digest-2", "2 GB")},
+    )
+    monkeypatch.setattr(benchmark, "command_output", lambda *args: "test-version")
+    monkeypatch.setattr(benchmark, "load_cv", lambda path, model: cv)
+    monkeypatch.setattr(benchmark, "unload_model", lambda model: None)
+    calls = []
+
+    def run_case(
+        run_id, model, job, repetition, source, *,
+        job_cache, refresh_job_analysis,
+    ):
+        calls.append((model, job.name, repetition, refresh_job_analysis))
+        if job == jobs[0] and repetition == 1 and model == "first":
+            return benchmark.BenchmarkResult(
+                run_id, model, job.name, repetition, "error", 0.1,
+                error="Job parse failed",
+            )
+        return benchmark.BenchmarkResult(
+            run_id, model, job.name, repetition, "ok", 0.1,
+            model_calls=1, matching_seconds=0.05, rewriting_seconds=0.05,
+        )
+
+    monkeypatch.setattr(benchmark, "benchmark_one", run_case)
+    benchmark.run_benchmark(args)
+    assert calls == [
+        ("first", "first.txt", 1, True),
+        ("first", "first.txt", 2, True),
+        ("first", "second.txt", 1, True),
+        ("first", "second.txt", 2, False),
+        ("second", "first.txt", 1, False),
+        ("second", "first.txt", 2, False),
+        ("second", "second.txt", 1, False),
+        ("second", "second.txt", 2, False),
+    ]
 
 
 def test_report_shows_current_evidence_metrics(tmp_path, cv, report, capsys):

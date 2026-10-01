@@ -214,6 +214,7 @@ def benchmark_one(
     cv: CV,
     *,
     job_cache: Path | None = None,
+    refresh_job_analysis: bool = False,
 ) -> BenchmarkResult:
     """Run one model against one job and collect workload-specific metrics."""
     job_description = read_document(job_path)
@@ -226,6 +227,7 @@ def benchmark_one(
             model=model,
             diagnostics=diagnostics,
             job_cache=job_cache,
+            refresh_job_analysis=refresh_job_analysis,
         )
     except Exception as exc:
         return BenchmarkResult(
@@ -304,16 +306,19 @@ def run_benchmark(args: argparse.Namespace) -> None:
         unload_model(models[0])
     total = len(models) * len(args.jobs) * args.repeat
     position = 0
+    pending_refresh = set(args.jobs) if args.refresh_job_analysis else set()
     for model in models:
         for job in args.jobs:
             for repetition in range(1, args.repeat + 1):
                 position += 1
                 print(f"[{position}/{total}] {model} / {job.name} / run {repetition}")
                 result = benchmark_one(
-                    run_id, model, job, repetition, cv, job_cache=args.job_cache
+                    run_id, model, job, repetition, cv, job_cache=args.job_cache,
+                    refresh_job_analysis=job in pending_refresh,
                 )
                 save_result(connection, result)
                 if result.status == "ok":
+                    pending_refresh.discard(job)
                     print(
                         f"  {result.total_seconds:.1f}s, "
                         f"{result.model_calls} model call(s), "
@@ -431,6 +436,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     run_parser.add_argument("--pull", action="store_true")
     run_parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
     run_parser.add_argument("--job-cache", type=Path, default=DEFAULT_JOB_CACHE)
+    run_parser.add_argument(
+        "--refresh-job-analysis", action="store_true",
+        help="Reparse stale job analyses once per job before reusing them across models",
+    )
     run_parser.set_defaults(handler=run_benchmark)
 
     report_parser = subparsers.add_parser("report", help="report a stored benchmark")

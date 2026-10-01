@@ -122,6 +122,8 @@ job criteria but recomputes matching for each case. Add `--repeat 2` for repeate
 runs, multiple paths after `--jobs` for cross-job comparisons, or `--database`
 for a different SQLite file. Use the same `--database` path for both `run` and
 `report`; `report` defaults to the latest run, or accepts `--run-id`.
+If a job-analysis cache is stale, use `benchmark run --refresh-job-analysis`
+to reparse each job once and share its updated analysis across models.
 `--pull` downloads missing models.
 When benchmarking a PDF, the first model imports it once and saves the extracted
 facts as `<run-id>.source.json` beside the database.
