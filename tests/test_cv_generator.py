@@ -1,11 +1,10 @@
 import json
-import sys
 from pathlib import Path
 
 import pytest
 from langchain_core.runnables import RunnableLambda
 
-from assistant import cv_generator
+from assistant import cli, cv_generator
 from assistant.cv_generator import CV, escape_latex, to_latex
 from assistant.cv_tailoring import TailoringReport
 
@@ -96,11 +95,10 @@ def test_cli_writes_separate_report_not_match_score_in_cv(tmp_path, monkeypatch,
         cv_generator, "write_pdf",
         lambda latex, path: path.write_text(latex),
     )
-    monkeypatch.setattr(sys, "argv", [
-        "cv_generator", "--cv", str(source), "--job", str(job),
+    cli.main([
+        "generate", "--cv", str(source), "--job", str(job),
         "--output", str(output),
     ])
-    cv_generator.main()
     assert output.exists()
     exported = json.loads(output.with_suffix(".json").read_text())
     audit = json.loads(output.with_suffix(".report.json").read_text())
@@ -127,11 +125,10 @@ def test_cli_general_cv_also_writes_rewrite_audit(tmp_path, monkeypatch):
         lambda cv, llm: (cv, TailoringReport(label="General-purpose CV rewrite audit")),
     )
     monkeypatch.setattr(cv_generator, "write_pdf", lambda latex, path: path.write_text(latex))
-    monkeypatch.setattr(sys, "argv", [
-        "cv_generator", "--cv", str(source), "--output", str(output),
+    cli.main([
+        "generate", "--cv", str(source), "--output", str(output),
         "--job-cache", str(cache_dir),
     ])
-    cv_generator.main()
     assert output.with_suffix(".report.json").exists()
     assert not cache_dir.exists()
 
@@ -174,11 +171,9 @@ def test_cli_exports_rewritten_experience_for_every_role(tmp_path, monkeypatch):
     output = tmp_path / "cv.pdf"
     monkeypatch.setattr(cv_generator, "local_llm", lambda model: llm)
     monkeypatch.setattr(cv_generator, "write_pdf", lambda latex, path: path.write_text(latex))
-    monkeypatch.setattr(sys, "argv", [
-        "cv_generator", "--cv", str(source), "--output", str(output),
+    cli.main([
+        "generate", "--cv", str(source), "--output", str(output),
     ])
-
-    cv_generator.main()
 
     exported = CV.model_validate_json(output.with_suffix(".json").read_text())
     assert [role.bullets for role in exported.experience] == [
@@ -219,13 +214,12 @@ def test_cli_passes_cache_options_and_displays_reuse(
     monkeypatch.setattr(cv_tailoring, "tailor_with_report", tailor)
     monkeypatch.setattr(cv_generator, "write_pdf", lambda latex, path: path.write_text(latex))
     args = [
-        "cv_generator", "--cv", str(source), "--job", str(job),
+        "generate", "--cv", str(source), "--job", str(job),
         "--output", str(output), "--job-cache", str(cache_dir),
     ]
     if refresh:
         args.append("--refresh-job-analysis")
-    monkeypatch.setattr(sys, "argv", args)
-    cv_generator.main()
+    cli.main(args)
     assert calls == [("Python required", None, cache_dir, refresh)]
     expected = "parsed and cached" if refresh else "reused cached"
     assert expected in capsys.readouterr().out
@@ -248,11 +242,10 @@ def test_cli_default_cache_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(cv_generator, "local_llm", lambda model: object())
     monkeypatch.setattr(cv_tailoring, "tailor_with_report", tailor)
     monkeypatch.setattr(cv_generator, "write_pdf", lambda latex, path: path.write_text(latex))
-    monkeypatch.setattr(sys, "argv", [
-        "cv_generator", "--cv", str(source), "--job", str(job),
+    cli.main([
+        "generate", "--cv", str(source), "--job", str(job),
         "--output", str(output),
     ])
-    cv_generator.main()
     assert calls == [{
         "rubric": None, "job_cache": Path("output/job-requirements"),
         "refresh_job_analysis": False,
@@ -261,13 +254,12 @@ def test_cli_default_cache_directory(tmp_path, monkeypatch):
     }]
 
 
-def test_cli_refresh_requires_job_before_loading_cv(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", [
-        "cv_generator", "--cv", "missing.json", "--output", "cv.pdf",
-        "--refresh-job-analysis",
-    ])
+def test_cli_refresh_requires_job_before_loading_cv(capsys):
     with pytest.raises(SystemExit) as exc:
-        cv_generator.main()
+        cli.main([
+            "generate", "--cv", "missing.json", "--output", "cv.pdf",
+            "--refresh-job-analysis",
+        ])
     assert exc.value.code == 2
     assert "--refresh-job-analysis requires --job" in capsys.readouterr().err
 
@@ -324,21 +316,19 @@ def test_cli_can_disable_matching_cache(tmp_path, monkeypatch):
         cv_generator, "local_model_identity",
         lambda llm: pytest.fail("Disabled cache must not look up model metadata"),
     )
-    monkeypatch.setattr(sys, "argv", [
-        "cv_generator", "--cv", str(source), "--job", str(job),
+    cli.main([
+        "generate", "--cv", str(source), "--job", str(job),
         "--output", str(tmp_path / "cv.pdf"), "--no-matching-cache",
     ])
-    cv_generator.main()
     assert calls[0]["matching_cache"] is None
     assert calls[0]["model_identity"] is None
 
 
-def test_cli_matching_refresh_requires_job(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", [
-        "cv_generator", "--cv", "missing.json", "--output", "cv.pdf",
-        "--refresh-matching",
-    ])
+def test_cli_matching_refresh_requires_job(capsys):
     with pytest.raises(SystemExit) as exc:
-        cv_generator.main()
+        cli.main([
+            "generate", "--cv", "missing.json", "--output", "cv.pdf",
+            "--refresh-matching",
+        ])
     assert exc.value.code == 2
     assert "--refresh-matching requires --job" in capsys.readouterr().err

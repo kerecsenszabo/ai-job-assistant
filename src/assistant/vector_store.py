@@ -28,6 +28,8 @@ def ingest(chunks: list[str], source: str = "cv") -> None:
 def search(query: str, top_k: int = 5, source_filter: str | None = None) -> list[str]:
     """Semantic search — returns top_k relevant chunks."""
     collection = get_collection()
+    if collection.count() == 0:
+        raise ValueError("Chat index is empty. Run job-assistant chat --cv data/cv.pdf first.")
     query_vector = embed([query])[0]
     where = {"source": source_filter} if source_filter else None
     results = collection.query(
@@ -35,11 +37,18 @@ def search(query: str, top_k: int = 5, source_filter: str | None = None) -> list
         n_results=top_k,
         where=where,
     )
-    return results["documents"][0]
+    documents = results["documents"][0]
+    metadata = results["metadatas"][0]
+    return [
+        f"[{item['source']}]\n{text}"
+        for text, item in zip(documents, metadata)
+    ]
 
 
 def clear_db() -> None:
     """Clear all documents from the ChromaDB collection."""
-    client = chromadb.PersistentClient(path=str(DB_PATH))
-    client.delete_collection(name=COLLECTION_NAME)
+    collection = get_collection()
+    ids = collection.get()["ids"]
+    if ids:
+        collection.delete(ids=ids)
     print(f"Cleared ChromaDB collection '{COLLECTION_NAME}'")

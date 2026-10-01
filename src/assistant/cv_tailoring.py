@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from pathlib import Path
 from typing import Callable, Literal, TypeVar
 
@@ -1424,9 +1423,6 @@ def rewrite(
             item.model_dump() for item in selected
         ] + [item.model_dump() for item in report.evidence if item.section == "summary"],
     }
-    started = time.perf_counter()
-    if diagnostics is not None:
-        diagnostics.summary_attempts += int(description is not None)
     raw_draft: list[str] = []
     raw_review: list[str] = []
     problems: list[str] = []
@@ -1682,7 +1678,6 @@ def rewrite(
     ]
     if diagnostics is not None:
         diagnostics.summary_fallback = description is not None and not accepted_summary
-        diagnostics.summary_seconds += time.perf_counter() - started
     return cv.model_copy(update={"experience": experience, "summary": summary})
 
 
@@ -1704,7 +1699,6 @@ def _tailor_with_report(
 
     if not description.strip():
         raise ValueError("Job description cannot be empty.")
-    started = time.perf_counter()
     evidence = source_evidence(cv)
     with measure_stage("job_analysis"):
         job, fingerprint, cache_hit = get_parsed_job(
@@ -1743,14 +1737,9 @@ def _tailor_with_report(
         report.selected_evidence_ids = [
             item.id for item in evidence if item.section in ("skills", "ai_native", "experience")
         ]
-        if diagnostics is not None:
-            diagnostics.selection_seconds = time.perf_counter() - started
-            diagnostics.report = report
         return cv.model_copy(deep=True), report
     with measure_stage("selection"):
         selected = select_evidence(report)
-    if diagnostics is not None:
-        diagnostics.selection_seconds = time.perf_counter() - started
     tailored = cv.model_copy(update={
         "skills": [item.text for item in selected if item.section == "skills"],
         "ai_native": [item.text for item in selected if item.section == "ai_native"],
@@ -1764,8 +1753,6 @@ def _tailor_with_report(
     })
     with measure_stage("rewriting"):
         result = rewrite(tailored, llm, report, selected, description, diagnostics)
-    if diagnostics is not None:
-        diagnostics.report = report
     return result, report
 
 
@@ -1778,8 +1765,6 @@ def tailor_with_report(
     model_identity: str | None = None,
 ) -> tuple[CV, TailoringReport]:
     with measure_run() as performance:
-        if diagnostics is not None:
-            diagnostics.performance = performance
         result, report = _tailor_with_report(
             cv, description, llm, diagnostics, rubric,
             job_cache=job_cache, refresh_job_analysis=refresh_job_analysis,

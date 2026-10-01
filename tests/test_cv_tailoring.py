@@ -202,7 +202,6 @@ def test_pipeline_rewrites_supported_facts_and_keeps_source_immutable(cv):
     ]
     assert all(item.status == "accepted" for item in report.rewrites)
     assert diagnostics.report is report
-    assert diagnostics.summary_attempts == 1
     assert cv.model_dump_json() == original
     for section in ("name", "email", "education", "certifications", "publications", "languages"):
         assert getattr(result, section) == getattr(cv, section)

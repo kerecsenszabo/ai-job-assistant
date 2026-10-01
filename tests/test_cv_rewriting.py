@@ -225,9 +225,7 @@ def test_any_summary_sentence_failure_retains_whole_source_summary(setup, failur
     summary_audits = [a for a in report.rewrites if a.target_id == "summary"]
     assert len(summary_audits) == 2
     assert all(a.exported == result.summary and a.status != "accepted" for a in summary_audits)
-    assert diagnostics.summary_attempts == 1
     assert diagnostics.summary_fallback
-    assert diagnostics.summary_seconds > 0
 
 
 def test_fully_supported_summary_is_exported(setup):

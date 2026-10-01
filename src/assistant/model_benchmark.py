@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
-import re
 import sqlite3
 import subprocess
 import time
@@ -14,8 +12,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from assistant.cv_generator import CV, TailorDiagnostics, load_cv, tailor_cv
+from assistant.cv_parser import read_document
 
-DEFAULT_DATABASE = Path("output/model-benchmarks.sqlite")
+DEFAULT_DATABASE = Path("output/benchmarks.sqlite")
 DEFAULT_JOB_CACHE = Path("output/job-requirements")
 MODEL_SUITE = (
     ("qwen3.5:0.8b", "1.0 GB", "basic"),
@@ -26,23 +25,6 @@ MODEL_SUITE = (
     ("gemma4:e2b-it-qat", "4.3 GB", "candidate"),
     ("phi4-mini:3.8b-q4_K_M", "2.5 GB", "candidate"),
 )
-WORD = re.compile(r"[a-z][a-z0-9+#.-]{2,}")
-STOPWORDS = {
-    "and",
-    "are",
-    "for",
-    "from",
-    "have",
-    "into",
-    "our",
-    "that",
-    "the",
-    "their",
-    "this",
-    "using",
-    "with",
-    "your",
-}
 
 
 @dataclass(frozen=True)
@@ -53,11 +35,6 @@ class BenchmarkResult:
     repetition: int
     status: str
     total_seconds: float
-    diagnostics: TailorDiagnostics
-    keyword_recall: float | None = None
-    selection_recall: float | None = None
-    summary_words: int | None = None
-    selected_items: int | None = None
     output_json: str | None = None
     error: str | None = None
     match_percent: float | None = None
@@ -76,6 +53,15 @@ def connect(path: Path) -> sqlite3.Connection:
     """Open the benchmark database and ensure its schema exists."""
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
+    existing = {
+        row[1] for row in connection.execute("PRAGMA table_info(benchmark_results)")
+    }
+    if existing and existing != set(BenchmarkResult.__dataclass_fields__):
+        connection.close()
+        raise ValueError(
+            f"Unsupported benchmark database schema: {path}. "
+            "Keep this archive and use --database with a new file."
+        )
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS benchmark_runs (
@@ -96,14 +82,6 @@ def connect(path: Path) -> sqlite3.Connection:
             repetition INTEGER NOT NULL,
             status TEXT NOT NULL,
             total_seconds REAL NOT NULL,
-            selection_seconds REAL NOT NULL,
-            summary_seconds REAL NOT NULL,
-            summary_attempts INTEGER NOT NULL,
-            summary_fallback INTEGER NOT NULL,
-            keyword_recall REAL,
-            selection_recall REAL,
-            summary_words INTEGER,
-            selected_items INTEGER,
             output_json TEXT,
             error TEXT,
             match_percent REAL,
@@ -121,27 +99,6 @@ def connect(path: Path) -> sqlite3.Connection:
         )
         """
     )
-    existing = {
-        row[1] for row in connection.execute("PRAGMA table_info(benchmark_results)")
-    }
-    for column, kind in (
-        ("selection_recall", "REAL"),
-        ("summary_words", "INTEGER"),
-        ("match_percent", "REAL"),
-        ("must_have_percent", "REAL"),
-        ("accepted_rewrites", "INTEGER"),
-        ("rejected_rewrites", "INTEGER"),
-        ("unclear_rewrites", "INTEGER"),
-        ("report_json", "TEXT"),
-        ("model_calls", "INTEGER"),
-        ("matching_seconds", "REAL"),
-        ("rewriting_seconds", "REAL"),
-        ("matching_cached", "INTEGER"),
-    ):
-        if column not in existing:
-            connection.execute(
-                f"ALTER TABLE benchmark_results ADD COLUMN {column} {kind}"
-            )
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS benchmark_models (
@@ -195,59 +152,6 @@ def unload_model(model: str) -> None:
     )
 
 
-def keywords(text: str) -> set[str]:
-    """Extract coarse technical and domain terms for an automatic recall proxy."""
-    return {word for word in WORD.findall(text.casefold()) if word not in STOPWORDS}
-
-
-def selected_text(cv: CV) -> str:
-    """Text whose relevance was controlled by the tailoring model."""
-    parts = [cv.summary, *cv.skills, *cv.ai_native]
-    parts.extend(bullet for role in cv.experience for bullet in role.bullets)
-    return " ".join(parts)
-
-
-def selection_text(cv: CV) -> str:
-    """Exported list items, excluding the summary.
-
-    The summary is free text, so a model that writes at length scores higher
-    on plain keyword overlap without choosing better evidence. Items may be
-    rewritten after evidence selection, and pool size varies with the source CV.
-    This text is a keyword proxy, not a check of source support or faithfulness.
-    """
-    parts = [*cv.skills, *cv.ai_native]
-    parts.extend(bullet for role in cv.experience for bullet in role.bullets)
-    return " ".join(parts)
-
-
-def keyword_recall(job_description: str, cv: CV) -> float:
-    """Keyword-overlap proxy across exported items and the summary."""
-    required = keywords(job_description)
-    return len(required & keywords(selected_text(cv))) / len(required) if required else 0.0
-
-
-def selection_recall(job_description: str, cv: CV) -> float:
-    """Keyword-overlap proxy across exported list items alone."""
-    required = keywords(job_description)
-    if not required:
-        return 0.0
-    return len(required & keywords(selection_text(cv))) / len(required)
-
-
-def summary_word_count(cv: CV) -> int:
-    """Length of the generated summary, to expose length-driven recall."""
-    return len(cv.summary.split())
-
-
-def selected_item_count(cv: CV) -> int:
-    """Count model-selected list items in a tailored CV."""
-    return (
-        len(cv.skills)
-        + len(cv.ai_native)
-        + sum(len(role.bullets) for role in cv.experience)
-    )
-
-
 def report_metrics(diagnostics: TailorDiagnostics) -> dict:
     """Collect source-coverage metrics and preserve the complete audit report."""
     report = diagnostics.report
@@ -273,12 +177,10 @@ def save_result(connection: sqlite3.Connection, result: BenchmarkResult) -> None
         """
         INSERT INTO benchmark_results (
             run_id, model, job, repetition, status, total_seconds,
-            selection_seconds, summary_seconds, summary_attempts,
-            summary_fallback, keyword_recall, selection_recall, summary_words,
-            selected_items, output_json, error, match_percent, must_have_percent,
+            output_json, error, match_percent, must_have_percent,
             accepted_rewrites, rejected_rewrites, unclear_rewrites, report_json,
             model_calls, matching_seconds, rewriting_seconds, matching_cached
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             result.run_id,
@@ -287,14 +189,6 @@ def save_result(connection: sqlite3.Connection, result: BenchmarkResult) -> None
             result.repetition,
             result.status,
             result.total_seconds,
-            result.diagnostics.selection_seconds,
-            result.diagnostics.summary_seconds,
-            result.diagnostics.summary_attempts,
-            result.diagnostics.summary_fallback,
-            result.keyword_recall,
-            result.selection_recall,
-            result.summary_words,
-            result.selected_items,
             result.output_json,
             result.error,
             result.match_percent,
@@ -322,7 +216,7 @@ def benchmark_one(
     job_cache: Path | None = None,
 ) -> BenchmarkResult:
     """Run one model against one job and collect workload-specific metrics."""
-    job_description = job_path.read_text(encoding="utf-8")
+    job_description = read_document(job_path)
     diagnostics = TailorDiagnostics()
     started = time.perf_counter()
     try:
@@ -341,7 +235,6 @@ def benchmark_one(
             repetition=repetition,
             status="error",
             total_seconds=time.perf_counter() - started,
-            diagnostics=diagnostics,
             error=f"{type(exc).__name__}: {exc}",
             **report_metrics(diagnostics),
         )
@@ -352,11 +245,6 @@ def benchmark_one(
         repetition=repetition,
         status="ok",
         total_seconds=time.perf_counter() - started,
-        diagnostics=diagnostics,
-        keyword_recall=keyword_recall(job_description, tailored),
-        selection_recall=selection_recall(job_description, tailored),
-        summary_words=summary_word_count(tailored),
-        selected_items=selected_item_count(tailored),
         output_json=tailored.model_dump_json(),
         **report_metrics(diagnostics),
     )
@@ -408,7 +296,12 @@ def run_benchmark(args: argparse.Namespace) -> None:
         ],
     )
     connection.commit()
-    cv = load_cv(args.cv)
+    cv = load_cv(args.cv, model=models[0])
+    if args.cv.suffix.lower() == ".pdf":
+        source_path = args.database.parent / f"{run_id}.source.json"
+        source_path.write_text(cv.model_dump_json(indent=2), encoding="utf-8")
+        print(f"PDF imported once for all models; review extracted facts in {source_path}.")
+        unload_model(models[0])
     total = len(models) * len(args.jobs) * args.repeat
     position = 0
     for model in models:
@@ -423,11 +316,9 @@ def run_benchmark(args: argparse.Namespace) -> None:
                 if result.status == "ok":
                     print(
                         f"  {result.total_seconds:.1f}s, "
-                        f"keyword proxy {result.keyword_recall:.1%}, "
                         f"{result.model_calls} model call(s), "
                         f"{result.matching_seconds:.1f}s matching, "
                         f"{result.rewriting_seconds:.1f}s rewriting"
-                        + (", source summary kept" if result.diagnostics.summary_fallback else "")
                     )
                 else:
                     print(f"  ERROR: {result.error}")
@@ -451,10 +342,6 @@ def print_report(connection: sqlite3.Connection, run_id: str | None = None) -> N
                COUNT(*) AS cases,
                SUM(status = 'ok') AS successes,
                AVG(CASE WHEN status = 'ok' THEN total_seconds END) AS seconds,
-               AVG(CASE WHEN status = 'ok' THEN selection_recall END) AS recall,
-               AVG(CASE WHEN status = 'ok' THEN summary_words END) AS words,
-               SUM(summary_fallback) AS fallbacks,
-               AVG(CASE WHEN status = 'ok' THEN summary_attempts END) AS attempts,
                AVG(CASE WHEN status = 'ok' THEN match_percent END) AS match_percent,
                AVG(CASE WHEN status = 'ok' THEN must_have_percent END) AS must_have_percent,
                SUM(CASE WHEN status = 'ok' THEN accepted_rewrites END) AS accepted,
@@ -471,33 +358,22 @@ def print_report(connection: sqlite3.Connection, run_id: str | None = None) -> N
         """,
         (run_id,),
     ).fetchall()
-    diversity = model_diversity(connection, run_id)
-    relative = relative_selection_recall(connection, run_id)
     rows = sorted(
         rows,
-        key=lambda row: (-row[2], -(relative.get(row[0]) or -1.0), row[3] or 0.0),
+        key=lambda row: (-row[2] / row[1], row[3] if row[3] is not None else float("inf")),
     )
     print(f"\nBenchmark run: {run_id}")
     print(
-        "model                         pass      avg s  kw proxy    vs job  words  "
-        "diversity  fallback  attempts   match  must-have  rewrites A/R/U  reports  "
+        "model                         pass      avg s   match  must-have  rewrites A/R/U  reports  "
         "calls  match s  rewrite s  cached"
     )
-    print("-" * 200)
+    print("-" * 140)
     for (
-        model, cases, successes, seconds, recall, words, fallbacks, attempts,
+        model, cases, successes, seconds,
         match, must_have, accepted, rejected, unclear, reports,
         calls, matching, rewriting, cached,
     ) in rows:
         duration = f"{seconds:.1f}" if seconds is not None else "-"
-        recall_text = f"{recall:.1%}" if recall is not None else "-"
-        edge = relative.get(model)
-        edge_text = f"{edge:+.1f}pp" if edge is not None else "-"
-        words_text = f"{words:.0f}" if words is not None else "-"
-        diversity_text = (
-            f"{diversity[model]:.1%}" if diversity.get(model) is not None else "-"
-        )
-        attempts_text = f"{attempts:.2f}" if attempts is not None else "-"
         match_text = f"{match:.1f}%" if match is not None else "-"
         must_have_text = f"{must_have:.1f}%" if must_have is not None else "-"
         rewrite_text = (
@@ -509,17 +385,12 @@ def print_report(connection: sqlite3.Connection, run_id: str | None = None) -> N
         cached_text = str(cached) if cached is not None else "-"
         print(
             f"{model:<29} {successes:>2}/{cases:<2} {duration:>10} "
-            f"{recall_text:>8} {edge_text:>9} {words_text:>6} {diversity_text:>10} "
-            f"{fallbacks:>9} {attempts_text:>9} {match_text:>7} {must_have_text:>10} "
+            f"{match_text:>7} {must_have_text:>10} "
             f"{rewrite_text:>15} {reports:>3}/{successes} {calls_text:>6} "
             f"{matching_text:>8} {rewriting_text:>10} {cached_text:>7}"
         )
     print(
-        "\nkw proxy = job-term overlap in exported list items (summary excluded).\n"
-        "vs job = mean keyword-proxy gap to the per-job average, retaining the\n"
-        "         relative comparison across jobs of unequal keyword difficulty.\n"
-        "Keyword proxies are not match metrics or proof of faithfulness.\n"
-        "match / must-have = source-evidence coverage of job requirements, not\n"
+        "\nmatch / must-have = source-evidence coverage of job requirements, not\n"
         "model quality; averages exclude missing values, shown as '-'.\n"
         "rewrites A/R/U = accepted/rejected/unclear automated verdict totals;\n"
         "approved rewrites are not proof of faithfulness. reports = audited/pass.\n"
@@ -527,69 +398,6 @@ def print_report(connection: sqlite3.Connection, run_id: str | None = None) -> N
         "cached = results reusing completed matching (a cold benchmark has 0).\n"
         "Full evidence, requirement matches and rewrite audits are in report_json."
     )
-
-
-def relative_selection_recall(
-    connection: sqlite3.Connection, run_id: str
-) -> dict[str, float | None]:
-    """Each model's mean keyword-proxy gap to the per-job average, in points.
-
-    Comparing against the same job reduces keyword-difficulty effects; it does
-    not establish model quality or source faithfulness.
-    """
-    rows = connection.execute(
-        """
-        SELECT model, job, selection_recall
-        FROM benchmark_results
-        WHERE run_id = ? AND status = 'ok' AND selection_recall IS NOT NULL
-        """,
-        (run_id,),
-    ).fetchall()
-    per_job: dict[str, list[float]] = {}
-    for _model, job, recall in rows:
-        per_job.setdefault(job, []).append(recall)
-    averages = {job: sum(v) / len(v) for job, v in per_job.items()}
-    gaps: dict[str, list[float]] = {}
-    for model, job, recall in rows:
-        gaps.setdefault(model, []).append((recall - averages[job]) * 100)
-    models = {model for model, *_ in rows}
-    return {
-        model: sum(gaps[model]) / len(gaps[model]) if gaps.get(model) else None
-        for model in models
-    }
-
-
-def model_diversity(
-    connection: sqlite3.Connection, run_id: str
-) -> dict[str, float | None]:
-    """Average dissimilarity between a model's outputs for different jobs."""
-    rows = connection.execute(
-        """
-        SELECT model, job, repetition, output_json
-        FROM benchmark_results
-        WHERE run_id = ? AND status = 'ok'
-        ORDER BY model, repetition, job
-        """,
-        (run_id,),
-    ).fetchall()
-    grouped: dict[tuple[str, int], list[set[str]]] = {}
-    for model, _job, repetition, output_json in rows:
-        cv = CV.model_validate_json(output_json)
-        signature = set(cv.skills) | set(cv.ai_native)
-        signature.update(bullet for role in cv.experience for bullet in role.bullets)
-        grouped.setdefault((model, repetition), []).append(signature)
-    values: dict[str, list[float]] = {}
-    for (model, _repetition), signatures in grouped.items():
-        for index, left in enumerate(signatures):
-            for right in signatures[index + 1 :]:
-                union = left | right
-                distance = 1 - len(left & right) / len(union) if union else 0.0
-                values.setdefault(model, []).append(distance)
-    models = {model for model, *_ in rows}
-    return {
-        model: sum(values[model]) / len(values[model]) if values.get(model) else None
-        for model in models
-    }
 
 
 def list_models() -> None:
@@ -606,16 +414,18 @@ def list_models() -> None:
     )
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="job-assistant benchmark", description=__doc__,
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     models_parser = subparsers.add_parser("models", help="show the curated model suite")
     models_parser.set_defaults(handler=lambda args: list_models())
 
     run_parser = subparsers.add_parser("run", help="run and persist benchmarks")
-    run_parser.add_argument("--cv", type=Path, required=True)
-    run_parser.add_argument("--jobs", type=Path, nargs="+", required=True)
+    run_parser.add_argument("--cv", type=Path, required=True, help="Source CV PDF or JSON")
+    run_parser.add_argument("--jobs", type=Path, nargs="+", required=True, help="Job TXT/PDF files")
     run_parser.add_argument("--models", nargs="+")
     run_parser.add_argument("--repeat", type=int, default=1)
     run_parser.add_argument("--pull", action="store_true")
@@ -629,15 +439,11 @@ def parse_args() -> argparse.Namespace:
     report_parser.set_defaults(
         handler=lambda args: print_report(connect(args.database), args.run_id)
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     if getattr(args, "repeat", 1) < 1:
         raise SystemExit("--repeat must be at least 1.")
     args.handler(args)
-
-
-if __name__ == "__main__":
-    main()

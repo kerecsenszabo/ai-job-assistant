@@ -1,9 +1,5 @@
-import json
-import shutil
 import sqlite3
-import uuid
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
@@ -11,47 +7,6 @@ from assistant import model_benchmark as benchmark
 from assistant.cv_generator import CV, TailorDiagnostics
 from assistant.cv_tailoring import EvidenceItem, RequirementMatch, RewriteAudit, TailoringReport
 from assistant.performance import RunPerformance
-
-
-REPORT_COLUMNS = (
-    "match_percent", "must_have_percent", "accepted_rewrites",
-    "rejected_rewrites", "unclear_rewrites", "report_json",
-    "model_calls", "matching_seconds", "rewriting_seconds", "matching_cached",
-)
-
-
-def test_list_models_shows_memory_conscious_suite(monkeypatch, capsys):
-    monkeypatch.setattr(
-        benchmark, "installed_model_info",
-        lambda: {"granite4.2:3b": ("digest", "2.2 GB")},
-    )
-    assert [model for model, _, _ in benchmark.MODEL_SUITE] == [
-        "qwen3.5:0.8b",
-        "granite4.2:3b",
-        "qwen3.5:2b-q4_K_M",
-        "qwen3.5:4b-q4_K_M",
-        "ministral-3:3b-instruct-2512-q4_K_M",
-    ]
-    benchmark.list_models()
-    output = capsys.readouterr().out
-    for model, size, tier in benchmark.MODEL_SUITE:
-        line = next(line for line in output.splitlines() if line.startswith(model + " "))
-        assert line.split() == [
-            model, *size.split(), tier, "yes" if model == "granite4.2:3b" else "no",
-        ]
-    assert "Download sizes are not runtime RAM" in output
-    assert "peak memory and swap use must be measured" in output
-
-
-@pytest.fixture
-def workspace():
-    # Keep database and job fixtures in the project, not system temporary paths.
-    path = Path.cwd() / f".benchmark-test-{uuid.uuid4().hex}"
-    path.mkdir()
-    try:
-        yield path
-    finally:
-        shutil.rmtree(path)
 
 
 @pytest.fixture
@@ -62,20 +17,17 @@ def cv():
 @pytest.fixture
 def report():
     return TailoringReport(
-        match_percent=62.5,
-        must_have_percent=50,
+        match_percent=62.5, must_have_percent=50,
         performance=RunPerformance(
             total_model_calls=4,
             stage_seconds={"matching": 21.0, "rewriting": 12.5},
         ),
         selected_evidence_ids=["skills/0"],
         evidence=[EvidenceItem(id="skills/0", text="Python", section="skills")],
-        matches=[
-            RequirementMatch(
-                requirement_id="r1", status="direct",
-                evidence_ids=["skills/0"], explanation="Source lists Python",
-            ),
-        ],
+        matches=[RequirementMatch(
+            requirement_id="r1", status="direct", evidence_ids=["skills/0"],
+            explanation="Source lists Python",
+        )],
         rewrites=[
             RewriteAudit(
                 target_id=f"skills/{index}", source_ids=["skills/0"],
@@ -89,147 +41,108 @@ def report():
 
 
 def result(cv, **kwargs):
-    values = dict(
+    return benchmark.BenchmarkResult(
         run_id="run", model="model", job="job.txt", repetition=1, status="ok",
-        total_seconds=3.5, diagnostics=TailorDiagnostics(
-            selection_seconds=1, summary_seconds=2, summary_attempts=2,
-            summary_fallback=True,
-        ),
-        keyword_recall=0.75, selection_recall=0.5, summary_words=2,
-        selected_items=1, output_json=cv.model_dump_json(),
+        total_seconds=3.5, output_json=cv.model_dump_json(), **kwargs,
     )
-    values.update(kwargs)
-    return benchmark.BenchmarkResult(**values)
 
 
-def create_old_database(path, cv, *, intermediate=False):
-    with sqlite3.connect(path) as connection:
-        connection.execute(
-            """
-            CREATE TABLE benchmark_runs (
-                run_id TEXT PRIMARY KEY, started_at TEXT NOT NULL,
-                ollama_version TEXT NOT NULL, cv_path TEXT NOT NULL,
-                context_tokens INTEGER NOT NULL
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE TABLE benchmark_results (
-                run_id TEXT NOT NULL, model TEXT NOT NULL, job TEXT NOT NULL,
-                repetition INTEGER NOT NULL, status TEXT NOT NULL,
-                total_seconds REAL NOT NULL, selection_seconds REAL NOT NULL,
-                summary_seconds REAL NOT NULL, summary_attempts INTEGER NOT NULL,
-                summary_fallback INTEGER NOT NULL, keyword_recall REAL,
-                selected_items INTEGER, output_json TEXT, error TEXT,
-                PRIMARY KEY (run_id, model, job, repetition)
-            )
-            """
-        )
-        connection.execute(
-            "INSERT INTO benchmark_runs VALUES (?, ?, ?, ?, ?)",
-            ("run", "2026-09-30", "old", "cv.json", 16384),
-        )
-        connection.execute(
-            "INSERT INTO benchmark_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ("run", "legacy", "job.txt", 1, "ok", 3, 1, 2, 1, 0, 0.4, 1,
-             cv.model_dump_json(), None),
-        )
-        if intermediate:
-            connection.execute("ALTER TABLE benchmark_results ADD COLUMN selection_recall REAL")
-            connection.execute("ALTER TABLE benchmark_results ADD COLUMN summary_words INTEGER")
-            connection.execute(
-                "UPDATE benchmark_results SET selection_recall = 0.25, summary_words = 2"
-            )
+def test_list_models_shows_current_suite(monkeypatch, capsys):
+    monkeypatch.setattr(
+        benchmark, "installed_model_info",
+        lambda: {"granite4.2:3b": ("digest", "2.2 GB")},
+    )
+    benchmark.list_models()
+    output = capsys.readouterr().out
+    for model, size, tier in benchmark.MODEL_SUITE:
+        line = next(line for line in output.splitlines() if line.startswith(model + " "))
+        assert line.split() == [
+            model, *size.split(), tier, "yes" if model == "granite4.2:3b" else "no",
+        ]
+    assert "Download sizes are not runtime RAM" in output
 
 
-@pytest.mark.parametrize("intermediate", [False, True])
-def test_connect_migrates_old_schema_without_losing_records(workspace, cv, intermediate):
-    database = workspace / "old.sqlite"
-    create_old_database(database, cv, intermediate=intermediate)
+def test_connect_creates_only_current_result_fields(tmp_path):
+    path = tmp_path / "nested" / "benchmark.sqlite"
     for _ in range(2):
-        with benchmark.connect(database) as connection:
-            columns = {row[1]: row for row in connection.execute(
-                "PRAGMA table_info(benchmark_results)"
-            )}
-            assert set(REPORT_COLUMNS) <= columns.keys()
-            assert all(columns[name][3] == 0 for name in REPORT_COLUMNS)
-            row = connection.execute(
-                "SELECT keyword_recall, selection_recall, summary_words, "
-                + ", ".join(REPORT_COLUMNS)
-                + " FROM benchmark_results"
-            ).fetchone()
-            assert row == (0.4, 0.25 if intermediate else None,
-                           2 if intermediate else None, *([None] * len(REPORT_COLUMNS)))
-            assert connection.execute("SELECT COUNT(*) FROM benchmark_runs").fetchone() == (1,)
+        with benchmark.connect(path) as connection:
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(benchmark_results)")
+            }
+            assert columns == set(benchmark.BenchmarkResult.__dataclass_fields__)
 
 
-def test_save_result_persists_all_metrics_and_full_report(workspace, cv, report):
+@pytest.mark.parametrize("command", ["run", "report"])
+def test_benchmark_defaults_use_fresh_product_database(command):
+    arguments = (
+        ["--cv", "cv.pdf", "--jobs", "job.txt"] if command == "run" else []
+    )
+    args = benchmark.parse_args([command, *arguments])
+    assert str(args.database) == "output/benchmarks.sqlite"
+    if command == "run":
+        assert args.repeat == 1
+        assert str(args.job_cache) == "output/job-requirements"
+
+
+def test_unsupported_schema_is_rejected_without_modifying_archive(tmp_path):
+    path = tmp_path / "archive.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE benchmark_results (keyword_recall REAL)")
+        connection.execute("INSERT INTO benchmark_results VALUES (0.75)")
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="use --database with a new file"):
+        benchmark.connect(path)
+    assert path.read_bytes() == before
+
+
+def test_save_result_persists_evidence_metrics_and_full_report(tmp_path, cv, report):
     stored = result(cv, **benchmark.report_metrics(TailorDiagnostics(report=report)))
-    database = workspace / "results.sqlite"
-    with benchmark.connect(database) as connection:
+    with benchmark.connect(tmp_path / "benchmark.sqlite") as connection:
         benchmark.save_result(connection, stored)
-    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute("SELECT * FROM benchmark_results").fetchone()
+    assert row["output_json"] == cv.model_dump_json()
+    assert row["report_json"] == report.model_dump_json()
+    assert row["match_percent"] == 62.5
+    assert row["must_have_percent"] == 50
+    assert (row["accepted_rewrites"], row["rejected_rewrites"], row["unclear_rewrites"]) == (2, 1, 1)
+    assert (row["model_calls"], row["matching_seconds"], row["rewriting_seconds"]) == (4, 21, 12.5)
+    assert row["matching_cached"] == 0
+
+
+def test_failed_case_without_report_keeps_metrics_null(tmp_path, cv):
+    failed = replace(result(cv), status="error", error="Generation failed", output_json=None)
+    with benchmark.connect(tmp_path / "benchmark.sqlite") as connection:
+        benchmark.save_result(connection, failed)
         row = connection.execute(
-            "SELECT selection_seconds, summary_seconds, summary_attempts, summary_fallback, "
-            "keyword_recall, selection_recall, summary_words, selected_items, output_json, "
-            + ", ".join(REPORT_COLUMNS) + " FROM benchmark_results"
+            "SELECT status, error, output_json, report_json, model_calls, match_percent "
+            "FROM benchmark_results"
         ).fetchone()
-    assert row[:-1] == (1, 2, 2, 1, 0.75, 0.5, 2, 1, cv.model_dump_json(),
-                       62.5, 50, 2, 1, 1, report.model_dump_json(), 4, 21, 12.5)
-    assert row[-1] == 0
-    assert json.loads(row[-5]) == report.model_dump(mode="json")
-    assert json.loads(row[-5])["matches"][0]["evidence_ids"] == ["skills/0"]
-    assert json.loads(row[-5])["rewrites"][2]["exported"] == "Python"
+    assert row == ("error", "Generation failed", None, None, None, None)
 
 
-def test_save_result_without_report_keeps_metrics_null(workspace, cv):
-    with benchmark.connect(workspace / "results.sqlite") as connection:
-        benchmark.save_result(connection, result(cv))
-        benchmark.save_result(connection, result(
-            cv, repetition=2, status="error", error="RuntimeError: failed",
-        ))
-        rows = connection.execute(
-            "SELECT " + ", ".join(REPORT_COLUMNS)
-            + " FROM benchmark_results ORDER BY repetition"
-        ).fetchall()
-    assert rows == [tuple([None] * len(REPORT_COLUMNS))] * 2
-
-
-@pytest.mark.parametrize("with_report", [False, True])
-def test_benchmark_one_collects_report_and_keyword_proxies(
-    workspace, monkeypatch, cv, report, with_report,
-):
-    job = workspace / "job.txt"
-    job.write_text("Python Kubernetes", encoding="utf-8")
+def test_benchmark_one_collects_output_audit_and_uses_job_cache(tmp_path, monkeypatch, cv, report):
+    job = tmp_path / "job.txt"
+    job.write_text("Python required")
+    cache = tmp_path / "jobs"
     calls = []
 
-    def tailor(source, description, *, model, diagnostics, job_cache=None):
-        calls.append((source, description, model))
-        diagnostics.report = report if with_report else None
-        diagnostics.selection_seconds = 1.25
-        return cv
+    def tailor(source, description, *, model, diagnostics, job_cache):
+        calls.append((source, description, model, job_cache))
+        diagnostics.report = report
+        return source
 
     monkeypatch.setattr(benchmark, "tailor_cv", tailor)
-    measured = benchmark.benchmark_one("run", "local-model", job, 2, cv)
-    assert calls == [(cv, "Python Kubernetes", "local-model")]
+    measured = benchmark.benchmark_one("run", "local-model", job, 2, cv, job_cache=cache)
+    assert calls == [(cv, "Python required", "local-model", cache)]
     assert measured.status == "ok"
-    assert measured.keyword_recall == measured.selection_recall == 0.5
-    assert measured.summary_words == 2
-    assert measured.selected_items == 1
     assert measured.output_json == cv.model_dump_json()
-    assert measured.diagnostics.selection_seconds == 1.25
     assert measured.total_seconds >= 0
-    assert measured.match_percent == (62.5 if with_report else None)
-    assert measured.must_have_percent == (50 if with_report else None)
-    assert measured.accepted_rewrites == (2 if with_report else None)
-    assert measured.rejected_rewrites == (1 if with_report else None)
-    assert measured.unclear_rewrites == (1 if with_report else None)
-    assert measured.report_json == (report.model_dump_json() if with_report else None)
-    assert measured.model_calls == (4 if with_report else None)
-    assert measured.matching_seconds == (21 if with_report else None)
-    assert measured.rewriting_seconds == (12.5 if with_report else None)
-    assert measured.matching_cached == (False if with_report else None)
+    assert measured.match_percent == 62.5
+    assert measured.report_json == report.model_dump_json()
+    assert measured.model_calls == 4
+    assert measured.matching_seconds == 21
+    assert measured.rewriting_seconds == 12.5
 
 
 def test_empty_report_distinguishes_zero_verdicts_from_missing_report():
@@ -238,79 +151,104 @@ def test_empty_report_distinguishes_zero_verdicts_from_missing_report():
     )))
     assert metrics["match_percent"] == 0
     assert metrics["must_have_percent"] is None
-    assert metrics["accepted_rewrites"] == 0
-    assert metrics["rejected_rewrites"] == 0
-    assert metrics["unclear_rewrites"] == 0
-    assert metrics["model_calls"] == 0
-    assert metrics["matching_seconds"] == 0
-    assert metrics["rewriting_seconds"] == 0
-    assert metrics["matching_cached"] is False
+    for name in ("accepted_rewrites", "rejected_rewrites", "unclear_rewrites", "model_calls"):
+        assert metrics[name] == 0
     assert benchmark.report_metrics(TailorDiagnostics()) == {}
 
 
-def test_benchmark_can_reuse_the_shared_job_rubric(workspace, monkeypatch, cv):
-    job = workspace / "job.txt"
-    job.write_text("Python", encoding="utf-8")
-    cache = workspace / "job-cache"
-    calls = []
+@pytest.mark.parametrize("with_report", [False, True])
+def test_failed_benchmark_preserves_error_and_available_audit(
+    tmp_path, monkeypatch, cv, report, with_report,
+):
+    job = tmp_path / "job.txt"
+    job.write_text("Python")
 
-    def tailor(source, description, *, model, diagnostics, job_cache):
-        calls.append(job_cache)
-        return source
-
-    monkeypatch.setattr(benchmark, "tailor_cv", tailor)
-    measured = benchmark.benchmark_one("run", "model", job, 1, cv, job_cache=cache)
-    assert measured.status == "ok"
-    assert calls == [cache]
-
-
-def test_benchmark_failure_preserves_available_report(workspace, monkeypatch, cv, report):
-    job = workspace / "job.txt"
-    job.write_text("Python", encoding="utf-8")
-
-    def fail(source, description, *, model, diagnostics, job_cache=None):
-        diagnostics.report = report
+    def fail(source, description, *, model, diagnostics, job_cache):
+        diagnostics.report = report if with_report else None
         raise RuntimeError("generation failed")
 
     monkeypatch.setattr(benchmark, "tailor_cv", fail)
-    measured = benchmark.benchmark_one("run", "model", job, 1, cv)
+    measured = benchmark.benchmark_one("run", "local-model", job, 1, cv)
     assert measured.status == "error"
     assert measured.error == "RuntimeError: generation failed"
-    assert measured.report_json == report.model_dump_json()
-    assert measured.keyword_recall is None
     assert measured.output_json is None
+    assert measured.report_json == (report.model_dump_json() if with_report else None)
 
 
-def test_report_handles_old_records_and_retains_relative_keyword_comparison(
-    workspace, cv, report, capsys,
+def test_benchmark_matrix_persists_successes_and_failures(
+    tmp_path, monkeypatch, cv, report,
 ):
-    database = workspace / "old.sqlite"
-    create_old_database(database, cv, intermediate=True)
-    with benchmark.connect(database) as connection:
-        benchmark.print_report(connection)
-        old_output = capsys.readouterr().out
-        legacy_line = next(line for line in old_output.splitlines() if line.startswith("legacy"))
-        assert legacy_line.split()[-8:] == ["-", "-", "-", "0/1", "-", "-", "-", "-"]
-        assert "25.0%" in legacy_line
-        measured = result(cv, **benchmark.report_metrics(TailorDiagnostics(report=report)))
-        benchmark.save_result(connection, measured)
-        benchmark.save_result(connection, replace(
-            measured, repetition=2, match_percent=None, must_have_percent=None,
-            accepted_rewrites=None, rejected_rewrites=None, unclear_rewrites=None,
-            report_json=None, model_calls=None, matching_seconds=None,
-            rewriting_seconds=None, matching_cached=None,
-        ))
-        relative = benchmark.relative_selection_recall(connection, "run")
-        assert relative["legacy"] == pytest.approx(-16.6666667)
-        assert relative["model"] == pytest.approx(8.3333333)
-        benchmark.print_report(connection, "run")
-    output = capsys.readouterr().out
-    model_line = next(line for line in output.splitlines()
-                      if line.startswith("model ") and "avg s" not in line)
-    assert model_line.split()[-8:] == [
-        "62.5%", "50.0%", "2/1/1", "1/2", "4.0", "21.0", "12.5", "0",
+    jobs = [tmp_path / "first.txt", tmp_path / "second.txt"]
+    for job in jobs:
+        job.write_text("Python required")
+    database = tmp_path / "benchmark.sqlite"
+    args = benchmark.parse_args([
+        "run", "--cv", str(tmp_path / "cv.json"),
+        "--jobs", *(str(job) for job in jobs), "--models", "first", "second",
+        "--repeat", "2", "--database", str(database),
+    ])
+    monkeypatch.setattr(
+        benchmark, "installed_model_info",
+        lambda: {"first": ("digest-1", "1 GB"), "second": ("digest-2", "2 GB")},
+    )
+    monkeypatch.setattr(benchmark, "command_output", lambda *args: "test-version")
+    monkeypatch.setattr(benchmark, "load_cv", lambda path, model: cv)
+    unloaded = []
+    monkeypatch.setattr(benchmark, "unload_model", unloaded.append)
+    cases = []
+
+    def run_case(run_id, model, job, repetition, source, *, job_cache):
+        cases.append((model, job.name, repetition, source, job_cache))
+        measured = replace(
+            result(cv, **benchmark.report_metrics(TailorDiagnostics(report=report))),
+            run_id=run_id, model=model, job=job.name, repetition=repetition,
+        )
+        if model == "first" and job == jobs[0] and repetition == 1:
+            return replace(
+                measured, status="error", output_json=None, error="Model unavailable",
+            )
+        return measured
+
+    monkeypatch.setattr(benchmark, "benchmark_one", run_case)
+    benchmark.run_benchmark(args)
+    assert [(model, job, repetition) for model, job, repetition, _, _ in cases] == [
+        (model, job.name, repetition)
+        for model in ["first", "second"] for job in jobs for repetition in [1, 2]
     ]
+    assert all(source == cv and cache == args.job_cache for _, _, _, source, cache in cases)
+    assert unloaded == ["first", "second"]
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT status, COUNT(*) FROM benchmark_results GROUP BY status ORDER BY status"
+        ).fetchall() == [("error", 1), ("ok", 7)]
+        assert connection.execute(
+            "SELECT model, model_id FROM benchmark_models ORDER BY model"
+        ).fetchall() == [("first", "digest-1"), ("second", "digest-2")]
+
+
+def test_report_shows_current_evidence_metrics(tmp_path, cv, report, capsys):
+    measured = result(cv, **benchmark.report_metrics(TailorDiagnostics(report=report)))
+    with benchmark.connect(tmp_path / "benchmark.sqlite") as connection:
+        connection.execute(
+            "INSERT INTO benchmark_runs VALUES (?, ?, ?, ?, ?)",
+            ("run", "2026-10-01", "test", "cv.pdf", 16384),
+        )
+        benchmark.save_result(connection, measured)
+        benchmark.print_report(connection)
+    output = capsys.readouterr().out
+    line = next(line for line in output.splitlines() if line.startswith("model ") and "avg s" not in line)
+    assert line.split()[-8:] == ["62.5%", "50.0%", "2/1/1", "1/1", "4.0", "21.0", "12.5", "0"]
     assert "source-evidence coverage" in output
-    assert "not match metrics or proof of faithfulness" in output
     assert "approved rewrites are not proof" in output
     assert "report_json" in output
+    assert "kw proxy" not in output
+
+
+def test_report_does_not_treat_failed_cases_as_zero_coverage(tmp_path, cv, capsys):
+    failed = replace(result(cv), status="error", output_json=None, error="Failed")
+    with benchmark.connect(tmp_path / "benchmark.sqlite") as connection:
+        benchmark.save_result(connection, failed)
+        benchmark.print_report(connection, "run")
+    output = capsys.readouterr().out
+    line = next(line for line in output.splitlines() if line.startswith("model ") and "avg s" not in line)
+    assert "0/1" in line and "0.0%" not in line

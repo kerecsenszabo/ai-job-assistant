@@ -16,6 +16,7 @@ data/*.json
 data/cover_letters/
 data/messages/
 data/job_descriptions/*.txt
+data/job_descriptions/*.pdf
 output/
 
 # Vector DB
