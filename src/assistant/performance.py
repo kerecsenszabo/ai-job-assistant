@@ -57,5 +57,7 @@ def measure_model_call(stage: str):
     finally:
         if performance is not None:
             performance.stage_model_seconds[stage] = (
-                performance.stage_model_seconds.get(stage, 0.0) + perf_counter() - started
+                performance.stage_model_seconds.get(stage, 0.0)
+                + perf_counter()
+                - started
             )

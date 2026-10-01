@@ -2,6 +2,7 @@
 
 import argparse
 from pathlib import Path
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -13,12 +14,15 @@ console = Console()
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        prog="job-assistant chat", description=__doc__,
+        prog="job-assistant chat",
+        description=__doc__,
     )
     parser.add_argument("--model", default=MODEL, help="Ollama model name")
     parser.add_argument("--cv", type=Path, help="CV PDF to index before chatting")
     parser.add_argument(
-        "--jobs", type=Path, nargs="*",
+        "--jobs",
+        type=Path,
+        nargs="*",
         help="Jobs to index with --cv (default: data/job_descriptions; empty for CV only)",
     )
     args = parser.parse_args(argv)
@@ -33,7 +37,9 @@ def main(argv: list[str] | None = None) -> None:
     from assistant.vector_store import get_collection
 
     if get_collection().count() == 0:
-        parser.error("No documents indexed. Run job-assistant chat --cv data/cv.pdf first.")
+        parser.error(
+            "No documents indexed. Run job-assistant chat --cv data/cv.pdf first."
+        )
     console.print(
         Panel.fit(
             "[bold cyan]AI Job Assistant[/bold cyan] — CV & Job Chat\n"

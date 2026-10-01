@@ -15,7 +15,10 @@ from assistant.job_requirements import atomic_write_json
 if TYPE_CHECKING:
     from assistant.cv_generator import CV
     from assistant.cv_tailoring import (
-        EvidenceItem, ParsedJob, RequirementMatch, ScoringRubric,
+        EvidenceItem,
+        ParsedJob,
+        RequirementMatch,
+        ScoringRubric,
     )
 
 CACHE_VERSION = 1
@@ -49,17 +52,22 @@ def get_cached_matches(
     """
     from assistant.cv_generator import CV
     from assistant.cv_tailoring import (
-        EvidenceItem, Matches, ParsedJob, ScoringRubric,
-        checked_matches, enforce_match_rules, match_job,
+        EvidenceItem,
+        Matches,
+        ParsedJob,
+        ScoringRubric,
+        checked_matches,
+        enforce_match_rules,
+        match_job,
     )
 
-    if missing := next((item.id for item in job.requirements if not item.criteria), None):
+    if missing := next(
+        (item.id for item in job.requirements if not item.criteria), None
+    ):
         raise ValueError(
             f"{missing} has no criteria; reparse the job with --refresh-job-analysis."
         )
-    if cache_dir is not None and (
-        model_identity is None or not model_identity.strip()
-    ):
+    if cache_dir is not None and (model_identity is None or not model_identity.strip()):
         raise ValueError(
             "Matching cache requires model_identity containing the model name, "
             "actual model digest, and inference settings; "
@@ -81,7 +89,10 @@ def get_cached_matches(
     }
     fingerprint = hashlib.sha256(
         json.dumps(
-            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
             allow_nan=False,
         ).encode("utf-8")
     ).hexdigest()
@@ -106,10 +117,12 @@ def get_cached_matches(
                 corrected = enforce_match_rules(job.requirements, validated, evidence)
                 # Rule-adjustment history is not idempotent; decisions must be.
                 for original, current in zip(validated, corrected):
-                    if original.model_dump(exclude={"rule_adjustments"}) != current.model_dump(
+                    if original.model_dump(
                         exclude={"rule_adjustments"}
-                    ):
-                        raise ValueError("Cached decisions violate deterministic match rules.")
+                    ) != current.model_dump(exclude={"rule_adjustments"}):
+                        raise ValueError(
+                            "Cached decisions violate deterministic match rules."
+                        )
                 if validated != stored.matches:
                     raise ValueError("Cached matches require structural normalization.")
             except ValueError as exc:
@@ -122,15 +135,19 @@ def get_cached_matches(
     proposed = match_job(llm, job, evidence) if job.requirements else []
     validated = checked_matches(
         Matches.model_validate({"matches": proposed}, strict=True),
-        job.requirements, evidence,
+        job.requirements,
+        evidence,
     )
     completed = enforce_match_rules(job.requirements, validated, evidence)
     completed = checked_matches(
-        Matches(matches=completed), job.requirements, evidence,
+        Matches(matches=completed),
+        job.requirements,
+        evidence,
     )
     if cache_path is not None:
         record = _CacheRecord(
-            cache_version=CACHE_VERSION, fingerprint=fingerprint,
+            cache_version=CACHE_VERSION,
+            fingerprint=fingerprint,
             matches=Matches(matches=completed).model_dump(mode="json"),
         )
         atomic_write_json(cache_path, record.model_dump(mode="json"))

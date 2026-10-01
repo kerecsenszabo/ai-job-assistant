@@ -14,23 +14,29 @@ def parser(monkeypatch):
 
     def parse(llm, description):
         calls.append((description, llm))
-        return ParsedJob(requirements=[{
-            "id": "requirement/0",
-            "text": description,
-            "quote": description,
-            "importance": "required",
-            "criteria": [{
-                "id": "requirement/0/criterion/0",
-                "text": description,
-                "quote": description,
-                "kind": "technology",
-                "options": ["Python"],
-                "operator": "all",
-                "production": True,
-                "experience_required": True,
-                "proficiency": "advanced",
-            }],
-        }])
+        return ParsedJob(
+            requirements=[
+                {
+                    "id": "requirement/0",
+                    "text": description,
+                    "quote": description,
+                    "importance": "required",
+                    "criteria": [
+                        {
+                            "id": "requirement/0/criterion/0",
+                            "text": description,
+                            "quote": description,
+                            "kind": "technology",
+                            "options": ["Python"],
+                            "operator": "all",
+                            "production": True,
+                            "experience_required": True,
+                            "proficiency": "advanced",
+                        }
+                    ],
+                }
+            ]
+        )
 
     monkeypatch.setattr(cv_tailoring, "parse_job", parse)
     return calls
@@ -52,7 +58,10 @@ def test_cache_hit_skips_parser_and_preserves_full_job(tmp_path, parser):
     assert parser == [("Python required", llm)]
     record = json.loads((tmp_path / f"{fingerprint}.json").read_text())
     assert set(record) == {
-        "cache_version", "schema_hash", "description_hash", "parsed_job"
+        "cache_version",
+        "schema_hash",
+        "description_hash",
+        "parsed_job",
     }
     assert record["cache_version"] == job_requirements.CACHE_VERSION
     assert record["parsed_job"] == parsed.model_dump(mode="json")
@@ -85,9 +94,7 @@ def test_fingerprint_preserves_internal_whitespace(tmp_path, parser):
 
 
 def test_refresh_reparses_and_overwrites_cache(tmp_path, parser):
-    _, fingerprint, _ = get_parsed_job(
-        "Python required", object(), cache_dir=tmp_path
-    )
+    _, fingerprint, _ = get_parsed_job("Python required", object(), cache_dir=tmp_path)
     cache_path = tmp_path / f"{fingerprint}.json"
     cache_path.write_text("corrupt")
     parsed, refreshed_hash, cached = get_parsed_job(
@@ -113,14 +120,22 @@ def test_no_cache_directory_always_parses_without_writes(parser, refresh):
     assert len(parser) == 2
 
 
-@pytest.mark.parametrize("damage", [
-    "version", "missing_version", "schema", "hash", "malformed",
-    "unicode", "parsed_job", "extra_cv", "parsed_job_cv",
-])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "version",
+        "missing_version",
+        "schema",
+        "hash",
+        "malformed",
+        "unicode",
+        "parsed_job",
+        "extra_cv",
+        "parsed_job_cv",
+    ],
+)
 def test_invalid_cache_requires_explicit_refresh(tmp_path, parser, damage):
-    _, fingerprint, _ = get_parsed_job(
-        "Python required", object(), cache_dir=tmp_path
-    )
+    _, fingerprint, _ = get_parsed_job("Python required", object(), cache_dir=tmp_path)
     cache_path = tmp_path / f"{fingerprint}.json"
     record = json.loads(cache_path.read_text())
     if damage == "version":
@@ -151,9 +166,7 @@ def test_invalid_cache_requires_explicit_refresh(tmp_path, parser, damage):
 def test_atomic_write_failure_preserves_old_cache_and_cleans_exact_file(
     tmp_path, parser, monkeypatch
 ):
-    _, fingerprint, _ = get_parsed_job(
-        "Python required", object(), cache_dir=tmp_path
-    )
+    _, fingerprint, _ = get_parsed_job("Python required", object(), cache_dir=tmp_path)
     cache_path = tmp_path / f"{fingerprint}.json"
     original = cache_path.read_bytes()
     unrelated = tmp_path / ".unrelated.tmp"
@@ -166,9 +179,7 @@ def test_atomic_write_failure_preserves_old_cache_and_cleans_exact_file(
 
     monkeypatch.setattr(job_requirements.os, "replace", fail_replace)
     with pytest.raises(OSError, match="replace failed"):
-        get_parsed_job(
-            "Python required", object(), cache_dir=tmp_path, refresh=True
-        )
+        get_parsed_job("Python required", object(), cache_dir=tmp_path, refresh=True)
     assert cache_path.read_bytes() == original
     assert list(tmp_path.glob("*.tmp")) == [unrelated]
 

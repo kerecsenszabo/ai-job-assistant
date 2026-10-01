@@ -7,23 +7,55 @@ import pytest
 from assistant import chat, cli
 
 
-@pytest.mark.parametrize("command,module,arguments", [
-    ("generate", "assistant.cv_generator", [
-        "--cv", "my cv.pdf", "--job", "job.txt", "--output", "out.pdf", "--model", "local",
-    ]),
-    ("chat", "assistant.chat", ["--cv", "cv.pdf", "--jobs", "first.txt", "second.pdf"]),
-    ("benchmark", "assistant.model_benchmark", [
-        "run", "--cv", "cv.pdf", "--jobs", "job.txt", "--models", "first", "second",
-    ]),
-    ("generate", "assistant.cv_generator", ["--help"]),
-    ("chat", "assistant.chat", ["--help"]),
-    ("benchmark", "assistant.model_benchmark", ["--help"]),
-])
-def test_unified_commands_forward_arguments_unchanged(monkeypatch, command, module, arguments):
+@pytest.mark.parametrize(
+    "command,module,arguments",
+    [
+        (
+            "generate",
+            "assistant.cv_generator",
+            [
+                "--cv",
+                "my cv.pdf",
+                "--job",
+                "job.txt",
+                "--output",
+                "out.pdf",
+                "--model",
+                "local",
+            ],
+        ),
+        (
+            "chat",
+            "assistant.chat",
+            ["--cv", "cv.pdf", "--jobs", "first.txt", "second.pdf"],
+        ),
+        (
+            "benchmark",
+            "assistant.model_benchmark",
+            [
+                "run",
+                "--cv",
+                "cv.pdf",
+                "--jobs",
+                "job.txt",
+                "--models",
+                "first",
+                "second",
+            ],
+        ),
+        ("generate", "assistant.cv_generator", ["--help"]),
+        ("chat", "assistant.chat", ["--help"]),
+        ("benchmark", "assistant.model_benchmark", ["--help"]),
+    ],
+)
+def test_unified_commands_forward_arguments_unchanged(
+    monkeypatch, command, module, arguments
+):
     handler = Mock()
     imports = []
     monkeypatch.setattr(
-        cli, "import_module",
+        cli,
+        "import_module",
         lambda name: imports.append(name) or SimpleNamespace(main=handler),
     )
     cli.main([command, *arguments])
@@ -32,7 +64,9 @@ def test_unified_commands_forward_arguments_unchanged(monkeypatch, command, modu
 
 
 def test_main_help_does_not_import_workflows(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "import_module", lambda name: pytest.fail("Imported workflow"))
+    monkeypatch.setattr(
+        cli, "import_module", lambda name: pytest.fail("Imported workflow")
+    )
     with pytest.raises(SystemExit) as exc:
         cli.main(["--help"])
     assert exc.value.code == 0
@@ -47,14 +81,19 @@ def test_command_is_required_and_valid(arguments):
     assert exc.value.code == 2
 
 
-@pytest.mark.parametrize("error", [
-    FileNotFoundError("Missing CV"),
-    ValueError("Invalid CV"),
-    subprocess.CalledProcessError(1, ["tectonic", "cv.tex"]),
-])
+@pytest.mark.parametrize(
+    "error",
+    [
+        FileNotFoundError("Missing CV"),
+        ValueError("Invalid CV"),
+        subprocess.CalledProcessError(1, ["tectonic", "cv.tex"]),
+    ],
+)
 def test_user_errors_are_reported_without_traceback(monkeypatch, capsys, error):
     handler = Mock(side_effect=error)
-    monkeypatch.setattr(cli, "import_module", lambda name: SimpleNamespace(main=handler))
+    monkeypatch.setattr(
+        cli, "import_module", lambda name: SimpleNamespace(main=handler)
+    )
     with pytest.raises(SystemExit) as exc:
         cli.main(["generate"])
     assert exc.value.code == 1
@@ -63,7 +102,9 @@ def test_user_errors_are_reported_without_traceback(monkeypatch, capsys, error):
 
 def test_unexpected_errors_are_not_hidden(monkeypatch):
     handler = Mock(side_effect=RuntimeError("Unexpected failure"))
-    monkeypatch.setattr(cli, "import_module", lambda name: SimpleNamespace(main=handler))
+    monkeypatch.setattr(
+        cli, "import_module", lambda name: SimpleNamespace(main=handler)
+    )
     with pytest.raises(RuntimeError, match="Unexpected failure"):
         cli.main(["generate"])
 
@@ -105,7 +146,9 @@ def chat_dependencies(monkeypatch):
     return index, ask, collection
 
 
-def test_chat_indexes_and_opens_session_in_one_command(monkeypatch, chat_dependencies, tmp_path):
+def test_chat_indexes_and_opens_session_in_one_command(
+    monkeypatch, chat_dependencies, tmp_path
+):
     index, ask, _ = chat_dependencies
     questions = iter(["What does the job require?", "exit"])
     monkeypatch.setattr(chat.Prompt, "ask", lambda *args: next(questions))
@@ -117,7 +160,11 @@ def test_chat_indexes_and_opens_session_in_one_command(monkeypatch, chat_depende
 
 @pytest.mark.parametrize("arguments,expected_jobs", [([], None), (["--jobs"], [])])
 def test_chat_selects_default_jobs_or_cv_only(
-    monkeypatch, chat_dependencies, tmp_path, arguments, expected_jobs,
+    monkeypatch,
+    chat_dependencies,
+    tmp_path,
+    arguments,
+    expected_jobs,
 ):
     index, _, _ = chat_dependencies
     monkeypatch.setattr(chat.Prompt, "ask", lambda *args: "quit")
@@ -143,7 +190,9 @@ def test_chat_empty_index_explains_first_use(chat_dependencies, capsys):
 
 
 @pytest.mark.parametrize("interrupt", [EOFError, KeyboardInterrupt])
-def test_chat_exits_cleanly_on_terminal_interrupt(monkeypatch, chat_dependencies, interrupt):
+def test_chat_exits_cleanly_on_terminal_interrupt(
+    monkeypatch, chat_dependencies, interrupt
+):
     _, ask, _ = chat_dependencies
     monkeypatch.setattr(chat.Prompt, "ask", Mock(side_effect=interrupt))
     cli.main(["chat"])

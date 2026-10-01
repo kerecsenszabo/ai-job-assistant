@@ -6,8 +6,13 @@ import pytest
 from assistant import cv_tailoring, job_requirements, match_cache
 from assistant.cv_generator import CV
 from assistant.cv_tailoring import (
-    CriterionMatch, EvidenceItem, ParsedJob, Requirement, RequirementCriterion,
-    RequirementMatch, ScoringRubric,
+    CriterionMatch,
+    EvidenceItem,
+    ParsedJob,
+    Requirement,
+    RequirementCriterion,
+    RequirementMatch,
+    ScoringRubric,
 )
 from assistant.match_cache import get_cached_matches
 
@@ -16,30 +21,53 @@ from assistant.match_cache import get_cached_matches
 def inputs(tmp_path, monkeypatch):
     cv = CV(name="Private Candidate", email="private@example.com", skills=["Python"])
     evidence = [EvidenceItem(id="skills/0", section="skills", text="Python")]
-    job = ParsedJob(requirements=[
-        Requirement(
-            id="requirement/0", text="Python", quote="Python", importance="required",
-            criteria=[RequirementCriterion(
-                id="criterion/0", text="Python", quote="Python",
-                kind="technology", options=["Python"],
-            )],
-        )
-    ])
-    matcher = Mock(return_value=[
-        RequirementMatch(
-            requirement_id="requirement/0", status="direct",
-            evidence_ids=["skills/0"], explanation="Supported by the cited skill.",
-            criteria_matches=[CriterionMatch(
-                criterion_id="criterion/0", status="direct",
-                evidence_ids=["skills/0"], explanation="Python listed in source.",
-            )],
-        )
-    ])
+    job = ParsedJob(
+        requirements=[
+            Requirement(
+                id="requirement/0",
+                text="Python",
+                quote="Python",
+                importance="required",
+                criteria=[
+                    RequirementCriterion(
+                        id="criterion/0",
+                        text="Python",
+                        quote="Python",
+                        kind="technology",
+                        options=["Python"],
+                    )
+                ],
+            )
+        ]
+    )
+    matcher = Mock(
+        return_value=[
+            RequirementMatch(
+                requirement_id="requirement/0",
+                status="direct",
+                evidence_ids=["skills/0"],
+                explanation="Supported by the cited skill.",
+                criteria_matches=[
+                    CriterionMatch(
+                        criterion_id="criterion/0",
+                        status="direct",
+                        evidence_ids=["skills/0"],
+                        explanation="Python listed in source.",
+                    )
+                ],
+            )
+        ]
+    )
     monkeypatch.setattr(cv_tailoring, "match_job", matcher)
     return {
-        "cv": cv, "description": "Python", "job": job, "evidence": evidence,
-        "llm": object(), "cache_dir": tmp_path / "matching",
-        "model_identity": "fake-v1", "rubric": ScoringRubric(),
+        "cv": cv,
+        "description": "Python",
+        "job": job,
+        "evidence": evidence,
+        "llm": object(),
+        "cache_dir": tmp_path / "matching",
+        "model_identity": "fake-v1",
+        "rubric": ScoringRubric(),
     }, matcher
 
 
@@ -56,9 +84,20 @@ def test_miss_then_hit_preserves_matches_without_calls(inputs):
     assert not list(args["cache_dir"].glob("*.tmp"))
 
 
-@pytest.mark.parametrize("change", [
-    "cv", "description", "job", "criterion", "evidence", "model", "rubric", "analysis", "schema",
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "cv",
+        "description",
+        "job",
+        "criterion",
+        "evidence",
+        "model",
+        "rubric",
+        "analysis",
+        "schema",
+    ],
+)
 def test_full_inputs_invalidate_cache(inputs, monkeypatch, change):
     args, matcher = inputs
     _, original, _ = get_cached_matches(**args)
@@ -73,12 +112,18 @@ def test_full_inputs_invalidate_cache(inputs, monkeypatch, change):
         args["job"] = args["job"].model_copy(deep=True)
         args["job"].requirements[0].criteria = [
             RequirementCriterion(
-                id="criterion/0", text="Python", quote="Python",
-                kind="technology", options=["Python"], experience_required=True,
+                id="criterion/0",
+                text="Python",
+                quote="Python",
+                kind="technology",
+                options=["Python"],
+                experience_required=True,
             )
         ]
     elif change == "evidence":
-        args["evidence"] = [args["evidence"][0].model_copy(update={"context": "Changed"})]
+        args["evidence"] = [
+            args["evidence"][0].model_copy(update={"context": "Changed"})
+        ]
     elif change == "model":
         args["model_identity"] = "fake-v2"
     elif change == "rubric":
@@ -87,7 +132,11 @@ def test_full_inputs_invalidate_cache(inputs, monkeypatch, change):
         monkeypatch.setattr(match_cache, "ANALYSIS_VERSION", "matching-v3")
     elif change == "schema":
         original_schema = cv_tailoring.Matches.model_json_schema()
-        monkeypatch.setattr(cv_tailoring.Matches, "model_json_schema", lambda: {**original_schema, "title": "Changed"})
+        monkeypatch.setattr(
+            cv_tailoring.Matches,
+            "model_json_schema",
+            lambda: {**original_schema, "title": "Changed"},
+        )
     _, fingerprint, hit = get_cached_matches(**args)
     assert fingerprint != original
     assert not hit
@@ -106,10 +155,21 @@ def test_refresh_replaces_corrupt_record(inputs):
     assert json.loads(path.read_text())["fingerprint"] == fingerprint
 
 
-@pytest.mark.parametrize("damage", [
-    "version", "fingerprint", "malformed", "unicode", "extra",
-    "requirement_id", "evidence_id", "missing", "duplicate", "status",
-])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "version",
+        "fingerprint",
+        "malformed",
+        "unicode",
+        "extra",
+        "requirement_id",
+        "evidence_id",
+        "missing",
+        "duplicate",
+        "status",
+    ],
+)
 def test_corrupt_record_requires_refresh_without_model_call(inputs, damage):
     args, matcher = inputs
     _, fingerprint, _ = get_cached_matches(**args)
@@ -164,7 +224,9 @@ def test_no_cache_needs_no_identity_and_always_computes(inputs, refresh):
     assert not directory.exists()
 
 
-@pytest.mark.parametrize("failure", [RuntimeError("service unavailable"), ValueError("bad output")])
+@pytest.mark.parametrize(
+    "failure", [RuntimeError("service unavailable"), ValueError("bad output")]
+)
 def test_failures_are_not_swallowed_or_written(inputs, failure):
     args, matcher = inputs
     matcher.side_effect = failure
@@ -209,14 +271,23 @@ def test_envelope_contains_no_full_source_documents(inputs):
     assert "evidence" not in record
 
 
-@pytest.mark.parametrize("kind, option", [("technology", "Kubernetes"), ("language", "German")])
+@pytest.mark.parametrize(
+    "kind, option", [("technology", "Kubernetes"), ("language", "German")]
+)
 def test_cached_positive_missing_explicit_criterion_is_rejected(inputs, kind, option):
     args, matcher = inputs
     args["job"].requirements[0].criteria = [
-        RequirementCriterion(id="criterion/0", text=option, quote=option, kind=kind, options=[option])
+        RequirementCriterion(
+            id="criterion/0", text=option, quote=option, kind=kind, options=[option]
+        )
     ]
     matcher.return_value[0].criteria_matches = [
-        CriterionMatch(criterion_id="criterion/0", status="direct", evidence_ids=["skills/0"], explanation="Incorrect positive")
+        CriterionMatch(
+            criterion_id="criterion/0",
+            status="direct",
+            evidence_ids=["skills/0"],
+            explanation="Incorrect positive",
+        )
     ]
     completed, fingerprint, _ = get_cached_matches(**args)
     assert completed[0].status == "not_evidenced"
@@ -237,20 +308,27 @@ def test_explicit_match_hit_preserves_original_rule_adjustments(inputs):
     args, matcher = inputs
     args["job"].requirements[0].criteria = [
         RequirementCriterion(
-            id="criterion/0", text="Python", quote="Python",
-            kind="technology", options=["Python"],
+            id="criterion/0",
+            text="Python",
+            quote="Python",
+            kind="technology",
+            options=["Python"],
         )
     ]
-    matcher.return_value[0] = matcher.return_value[0].model_copy(update={
-        "status": "unclear",
-        "evidence_ids": [],
-        "criteria_matches": [
-            CriterionMatch(
-                criterion_id="criterion/0", status="direct",
-                evidence_ids=["skills/0"], explanation="Python is explicit.",
-            )
-        ],
-    })
+    matcher.return_value[0] = matcher.return_value[0].model_copy(
+        update={
+            "status": "unclear",
+            "evidence_ids": [],
+            "criteria_matches": [
+                CriterionMatch(
+                    criterion_id="criterion/0",
+                    status="direct",
+                    evidence_ids=["skills/0"],
+                    explanation="Python is explicit.",
+                )
+            ],
+        }
+    )
     completed, fingerprint, hit = get_cached_matches(**args)
     assert not hit
     assert completed[0].status == "direct"
@@ -263,7 +341,9 @@ def test_explicit_match_hit_preserves_original_rule_adjustments(inputs):
     matcher.assert_called_once()
 
 
-def test_shared_atomic_writer_preserves_old_record_and_cleans_own_file(inputs, monkeypatch):
+def test_shared_atomic_writer_preserves_old_record_and_cleans_own_file(
+    inputs, monkeypatch
+):
     args, matcher = inputs
     _, fingerprint, _ = get_cached_matches(**args)
     path = args["cache_dir"] / f"{fingerprint}.json"

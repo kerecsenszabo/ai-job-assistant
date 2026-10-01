@@ -19,12 +19,17 @@ from assistant.cv_generator import (
     MAX_AI_NATIVE,
     MAX_BULLETS,
     MAX_SKILLS,
-    TailorDiagnostics,
     TERM,
+    TailorDiagnostics,
     structured_llm,
     unsupported_terms,
 )
-from assistant.performance import RunPerformance, measure_model_call, measure_run, measure_stage
+from assistant.performance import (
+    RunPerformance,
+    measure_model_call,
+    measure_run,
+    measure_stage,
+)
 
 
 class StrictModel(BaseModel):
@@ -175,12 +180,18 @@ class TailoringReport(StrictModel):
 
 
 def request(
-    llm: Runnable, schema: type[ResponseModel], instruction: str, data: dict,
-    *, json_schema: dict | None = None,
+    llm: Runnable,
+    schema: type[ResponseModel],
+    instruction: str,
+    data: dict,
+    *,
+    json_schema: dict | None = None,
     transform_response: Callable[[str], str] | None = None,
     stage: str = "analysis",
 ) -> ResponseModel:
-    output_schema = json_schema if json_schema is not None else schema.model_json_schema()
+    output_schema = (
+        json_schema if json_schema is not None else schema.model_json_schema()
+    )
     prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -196,7 +207,8 @@ def request(
         ]
     ).partial(output_schema=json.dumps(output_schema, ensure_ascii=True))
     constrained = (
-        llm.bind(format=json_schema) if json_schema is not None
+        llm.bind(format=json_schema)
+        if json_schema is not None
         else structured_llm(llm, schema)
     )
     with measure_model_call(stage):
@@ -226,15 +238,16 @@ def source_evidence(cv: CV) -> list[EvidenceItem]:
         for index, text in enumerate(values):
             if text.strip():
                 evidence.append(
-                    EvidenceItem(
-                        id=f"{section}/{index}", section=section, text=text
-                    )
+                    EvidenceItem(id=f"{section}/{index}", section=section, text=text)
                 )
     for index, language in enumerate(cv.languages):
-        evidence.append(EvidenceItem(
-            id=f"languages/{index}", section="languages",
-            text=f"{language.name}: {language.proficiency}",
-        ))
+        evidence.append(
+            EvidenceItem(
+                id=f"languages/{index}",
+                section="languages",
+                text=f"{language.name}: {language.proficiency}",
+            )
+        )
     for role_index, role in enumerate(cv.experience):
         role_context = json.dumps(
             role.model_dump(exclude={"bullets"}), ensure_ascii=True
@@ -282,12 +295,20 @@ def normalized(text: str) -> str:
 
 
 SECTION_IMPORTANCE = (
-    (r"what (?:we['\u2019]re|we are) looking for|requirements|"
-     r"(?:required|minimum|essential|basic) qualifications|must[- ]haves?", "required"),
-    (r"(?:preferred|desirable) qualifications|nice[- ]to[- ]haves?|"
-     r"bonus (?:skills|points)|preferred", "preferred"),
-    (r"(?:your |key )?responsibilities|what you['\u2019]ll do|"
-     r"what you will do", "responsibility"),
+    (
+        r"what (?:we['\u2019]re|we are) looking for|requirements|"
+        r"(?:required|minimum|essential|basic) qualifications|must[- ]haves?",
+        "required",
+    ),
+    (
+        r"(?:preferred|desirable) qualifications|nice[- ]to[- ]haves?|"
+        r"bonus (?:skills|points)|preferred",
+        "preferred",
+    ),
+    (
+        r"(?:your |key )?responsibilities|what you['\u2019]ll do|" r"what you will do",
+        "responsibility",
+    ),
 )
 
 JOB_SECTION_HEADINGS = (
@@ -334,10 +355,14 @@ def prepare_job_description(description: str) -> str:
         if not line:
             continue
         if (
-            lines and not is_job_heading(line) and not is_job_heading(lines[-1])
+            lines
+            and not is_job_heading(line)
+            and not is_job_heading(lines[-1])
             and (
                 re.match(r"^[a-z(]", line)
-                or re.search(r"(?:[,;:]|\b(?:and|or|for|with|across|of|to|the))$", lines[-1])
+                or re.search(
+                    r"(?:[,;:]|\b(?:and|or|for|with|across|of|to|the))$", lines[-1]
+                )
             )
             and not lines[-1].endswith((".", "!", "?"))
         ):
@@ -376,15 +401,22 @@ NON_TECHNOLOGY_OPTIONS = re.compile(
     r"practices|best-in-class|multi-metric)",
     re.IGNORECASE,
 )
-FUNCTION_WORDS = re.compile(r"(?:and|or|for|with|using|that|the|in|to|of)", re.IGNORECASE)
+FUNCTION_WORDS = re.compile(
+    r"(?:and|or|for|with|using|that|the|in|to|of)", re.IGNORECASE
+)
 REDUNDANT_DESCRIPTORS = re.compile(
     r"^(?:(?:leading )?ml frameworks|similar (?:tools|apis)|"
     r"working proficiency|ml ecosystem)$"
 )
 OPTION_SEPARATOR = re.compile(r"^[\s,;/]*(?:(?:and|or|and/or)\s*)?[\s,;/]*$")
 GENERAL_OPTIONS = {
-    "testing", "version control", "code reviews", "debugging",
-    "vector databases", "prompt engineering", "communication",
+    "testing",
+    "version control",
+    "code reviews",
+    "debugging",
+    "vector databases",
+    "prompt engineering",
+    "communication",
 }
 
 
@@ -393,7 +425,9 @@ def split_criterion(criterion: RequirementCriterion) -> list[RequirementCriterio
     if criterion.kind == "general":
         return [criterion]
     if not criterion.options:
-        raise ModelOutputError("Technology and language criteria need explicit options.")
+        raise ModelOutputError(
+            "Technology and language criteria need explicit options."
+        )
     quote = normalized(criterion.quote)
     named = []
     general = []
@@ -402,23 +436,32 @@ def split_criterion(criterion: RequirementCriterion) -> list[RequirementCriterio
             continue
         if (
             OPTION_DESCRIPTORS.search(normalized(option))
-            or criterion.kind == "technology" and (
+            or criterion.kind == "technology"
+            and (
                 normalized(option) in GENERAL_OPTIONS
                 or NON_TECHNOLOGY_OPTIONS.fullmatch(option.strip())
             )
         ):
             if not REDUNDANT_DESCRIPTORS.fullmatch(normalized(option)):
-                general.append(RequirementCriterion(
-                    id=criterion.id,
-                    text=(
-                        criterion.text if len(criterion.text.split()) > 1
-                        and normalized(criterion.text) in normalized(criterion.quote)
-                        and len(criterion.options) == 1
-                        else criterion.quote if len(criterion.options) == 1
-                        else option
-                    ),
-                    quote=criterion.quote, kind="general",
-                ))
+                general.append(
+                    RequirementCriterion(
+                        id=criterion.id,
+                        text=(
+                            criterion.text
+                            if len(criterion.text.split()) > 1
+                            and normalized(criterion.text)
+                            in normalized(criterion.quote)
+                            and len(criterion.options) == 1
+                            else (
+                                criterion.quote
+                                if len(criterion.options) == 1
+                                else option
+                            )
+                        ),
+                        quote=criterion.quote,
+                        kind="general",
+                    )
+                )
         else:
             named.append(option)
     ordered = sorted(named, key=lambda option: quote.find(normalized(option)))
@@ -431,7 +474,9 @@ def split_criterion(criterion: RequirementCriterion) -> list[RequirementCriterio
                 f"A criterion option is absent from its source quote: {option!r} "
                 f"in {criterion.quote!r}."
             )
-        if previous_end is None or not OPTION_SEPARATOR.fullmatch(quote[previous_end:position]):
+        if previous_end is None or not OPTION_SEPARATOR.fullmatch(
+            quote[previous_end:position]
+        ):
             groups.append([])
         groups[-1].append(option)
         previous_end = position + len(normalized(option))
@@ -452,7 +497,8 @@ def split_criterion(criterion: RequirementCriterion) -> list[RequirementCriterio
             operator = criterion.operator
         scope_end = (
             quote.find(normalized(groups[group_index + 1][0]))
-            if group_index + 1 < len(groups) else len(quote)
+            if group_index + 1 < len(groups)
+            else len(quote)
         )
         if re.match(
             r"\s*,?\s*or\s+(?:similar|equivalent|comparable|other)\b",
@@ -461,19 +507,29 @@ def split_criterion(criterion: RequirementCriterion) -> list[RequirementCriterio
             operator = "any"
         scoped_quote = source_quote[start:scope_end].strip(" ,;")
         global_production = mentions(quote[:start], "production")
-        separated.append(criterion.model_copy(update={
-            "options": group, "operator": operator,
-            "quote": scoped_quote,
-            "production": (
-                criterion.production if len(groups) == 1
-                else global_production or "in production" in normalized(scoped_quote)
-            ),
-            "experience_required": (
-                criterion.experience_required or mentions(criterion.quote, "experience")
-            ),
-        }))
+        separated.append(
+            criterion.model_copy(
+                update={
+                    "options": group,
+                    "operator": operator,
+                    "quote": scoped_quote,
+                    "production": (
+                        criterion.production
+                        if len(groups) == 1
+                        else global_production
+                        or "in production" in normalized(scoped_quote)
+                    ),
+                    "experience_required": (
+                        criterion.experience_required
+                        or mentions(criterion.quote, "experience")
+                    ),
+                }
+            )
+        )
     if not separated and not general:
-        raise ModelOutputError("A technology criterion has no assessable named tools or capabilities.")
+        raise ModelOutputError(
+            "A technology criterion has no assessable named tools or capabilities."
+        )
     return separated + general
 
 
@@ -511,12 +567,16 @@ def normalize_criteria(requirement: Requirement) -> list[RequirementCriterion]:
     if language_statement and not any(
         criterion.kind == "language" for criterion in source_criteria
     ):
-        source_criteria.append(RequirementCriterion(
-            id="language", text=language_statement.group(),
-            quote=requirement.quote, kind="language",
-            options=[language_statement.group("language")],
-            proficiency=language_statement.group("proficiency"),
-        ))
+        source_criteria.append(
+            RequirementCriterion(
+                id="language",
+                text=language_statement.group(),
+                quote=requirement.quote,
+                kind="language",
+                options=[language_statement.group("language")],
+                proficiency=language_statement.group("proficiency"),
+            )
+        )
     expanded = [
         part for criterion in source_criteria for part in split_criterion(criterion)
     ]
@@ -524,11 +584,15 @@ def normalize_criteria(requirement: Requirement) -> list[RequirementCriterion]:
         if normalized(criterion.quote) not in normalized(requirement.quote):
             raise ModelOutputError("A requirement criterion has no valid source quote.")
         if criterion.kind in ("technology", "language") and not criterion.options:
-            raise ModelOutputError("Technology and language criteria need explicit options.")
+            raise ModelOutputError(
+                "Technology and language criteria need explicit options."
+            )
         positions = []
         for option in criterion.options:
             if not option.strip():
-                raise ModelOutputError("A requirement criterion contains a blank option.")
+                raise ModelOutputError(
+                    "A requirement criterion contains a blank option."
+                )
             position = normalized(criterion.quote).find(normalized(option))
             if position < 0:
                 raise ModelOutputError(
@@ -558,12 +622,16 @@ def normalize_criteria(requirement: Requirement) -> list[RequirementCriterion]:
         proficiency = criterion.proficiency
         if criterion.kind == "language" and language_statement:
             proficiency = language_statement.group("proficiency")
-        criteria.append(criterion.model_copy(update={
-            "id": f"{requirement.id}/criterion/{index}",
-            "operator": operator,
-            "production": production,
-            "proficiency": proficiency,
-        }))
+        criteria.append(
+            criterion.model_copy(
+                update={
+                    "id": f"{requirement.id}/criterion/{index}",
+                    "operator": operator,
+                    "production": production,
+                    "proficiency": proficiency,
+                }
+            )
+        )
     return criteria
 
 
@@ -575,15 +643,14 @@ def job_description_chunks(description: str, max_chars: int = 800) -> list[str]:
     lines = [line.strip() for line in description.splitlines() if line.strip()]
     if len(lines) > 1:
         return [
-            chunk for line in lines
-            for chunk in job_description_chunks(line, max_chars)
+            chunk for line in lines for chunk in job_description_chunks(line, max_chars)
         ]
     chunks = []
     remaining = description
     while len(remaining) > max_chars:
         boundary = remaining.rfind("\n", 0, max_chars + 1)
         if boundary <= 0:
-            spaces = list(re.finditer(r"\s", remaining[:max_chars + 1]))
+            spaces = list(re.finditer(r"\s", remaining[: max_chars + 1]))
             if spaces:
                 boundary = spaces[-1].start()
             else:
@@ -629,8 +696,11 @@ def source_requirement_quotes(response: str, sources: dict[str, str]) -> str:
                     options = criterion.get("options")
                     if isinstance(options, list):
                         criterion["options"] = [
-                            source_option(option, sources[source_id])
-                            if isinstance(option, str) else option
+                            (
+                                source_option(option, sources[source_id])
+                                if isinstance(option, str)
+                                else option
+                            )
                             for option in options
                         ]
         resolved.append(requirement)
@@ -640,8 +710,11 @@ def source_requirement_quotes(response: str, sources: dict[str, str]) -> str:
 
 def source_option(option: str, quote: str) -> str:
     """Resolve unambiguous separator and apostrophe formatting to source text."""
+
     def key(value: str) -> str:
-        return normalized(value.replace("\u2019", "'").replace("-", " ").replace("_", " "))
+        return normalized(
+            value.replace("\u2019", "'").replace("-", " ").replace("_", " ")
+        )
 
     if normalized(option) in normalized(quote):
         return option
@@ -649,7 +722,9 @@ def source_option(option: str, quote: str) -> str:
     matches = set()
     for start in range(len(words)):
         for end in range(start, len(words)):
-            candidate = quote[words[start].start():words[end].end()].strip("()[]{}.,;:")
+            candidate = quote[words[start].start() : words[end].end()].strip(
+                "()[]{}.,;:"
+            )
             if key(candidate) == key(option):
                 matches.add(candidate)
     return matches.pop() if len(matches) == 1 else option
@@ -665,9 +740,9 @@ def source_option_pattern(quote: str) -> str:
         end = word.end()
         while end > word.start() and quote[end - 1] in ".-/":
             end -= 1
-        literal = re.escape(quote[word.start():end])
+        literal = re.escape(quote[word.start() : end])
         if suffix:
-            separator = re.escape(quote[end:words[index + 1].start()])
+            separator = re.escape(quote[end : words[index + 1].start()])
             suffix = literal + "(?:" + separator + suffix + ")?"
         else:
             suffix = literal
@@ -702,10 +777,12 @@ def job_extraction_schema(sources: dict[str, str]) -> dict:
                         "options": {
                             **criterion["properties"]["options"],
                             "items": {
-                                "type": "string", "pattern": option_pattern,
+                                "type": "string",
+                                "pattern": option_pattern,
                             },
                             **(
-                                {"maxItems": 0} if kind == "general"
+                                {"maxItems": 0}
+                                if kind == "general"
                                 else {"minItems": 1, "maxItems": word_count}
                             ),
                         },
@@ -803,7 +880,8 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
             continue
         sources = {
             f"source/{index}": line.strip()
-            for index, line in enumerate(chunk.splitlines()) if line.strip()
+            for index, line in enumerate(chunk.splitlines())
+            if line.strip()
         }
         feedback = ""
         for attempt in range(3):
@@ -814,15 +892,19 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
                     instruction + feedback,
                     {"source_lines": sources},
                     json_schema=job_extraction_schema(sources),
-                    transform_response=lambda response: source_requirement_quotes(response, sources),
+                    transform_response=lambda response: source_requirement_quotes(
+                        response, sources
+                    ),
                     stage="job_parsing",
                 )
                 keyed = not job.requirements or all(
                     item.id.startswith("source/") for item in job.requirements
                 )
                 missing = [
-                    quote for quote in sources.values()
-                    if keyed and normalized(quote) in sectioned_lines
+                    quote
+                    for quote in sources.values()
+                    if keyed
+                    and normalized(quote) in sectioned_lines
                     and not any(
                         normalized(item.quote) in normalized(quote)
                         for item in job.requirements
@@ -836,7 +918,8 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
                 cleaned = []
                 for requirement in job.requirements:
                     criteria = [
-                        item for item in requirement.criteria
+                        item
+                        for item in requirement.criteria
                         if not (
                             item.kind == "general"
                             and FUNCTION_WORDS.fullmatch(item.text.strip())
@@ -846,16 +929,23 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
                         raise ModelOutputError(
                             "A source line has no assessable criteria after removing function words."
                         )
-                    if len(criteria) > 12 or sum(
-                        item.kind == "general" and len(item.text.split()) == 1
-                        for item in criteria
-                    ) >= 3:
+                    if (
+                        len(criteria) > 12
+                        or sum(
+                            item.kind == "general" and len(item.text.split()) == 1
+                            for item in criteria
+                        )
+                        >= 3
+                    ):
                         criteria = [
                             item for item in criteria if item.kind != "general"
-                        ] + [RequirementCriterion(
-                            id=f"{requirement.id}/general",
-                            text=requirement.quote, quote=requirement.quote,
-                        )]
+                        ] + [
+                            RequirementCriterion(
+                                id=f"{requirement.id}/general",
+                                text=requirement.quote,
+                                quote=requirement.quote,
+                            )
+                        ]
                     if len(criteria) > 12:
                         raise ModelOutputError(
                             "A source line has too many technology or language criteria."
@@ -885,13 +975,17 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
         key = normalized(requirement.text)
         if key not in seen:
             seen.add(key)
-            requirement = requirement.model_copy(update={
-                "id": f"requirement/{len(unique)}",
-                "importance": source_importance(prepared, requirement),
-            })
-            requirement = requirement.model_copy(update={
-                "criteria": normalize_criteria(requirement),
-            })
+            requirement = requirement.model_copy(
+                update={
+                    "id": f"requirement/{len(unique)}",
+                    "importance": source_importance(prepared, requirement),
+                }
+            )
+            requirement = requirement.model_copy(
+                update={
+                    "criteria": normalize_criteria(requirement),
+                }
+            )
             if not requirement.criteria:
                 raise ModelOutputError(
                     f"{requirement.id} has no assessable criteria in the parsed job."
@@ -911,52 +1005,72 @@ def checked_matches(
     for match in matches.matches:
         if len(match.evidence_ids) != len(set(match.evidence_ids)):
             raise ModelOutputError("A requirement match repeats evidence IDs.")
-        if not (set(match.evidence_ids) | set(match.inspected_evidence_ids)) <= available:
+        if (
+            not (set(match.evidence_ids) | set(match.inspected_evidence_ids))
+            <= available
+        ):
             raise ModelOutputError("A requirement match cites nonexistent CV evidence.")
         if match.status in ("direct", "partial") and not match.evidence_ids:
-            raise ModelOutputError("A positive requirement match has no source evidence.")
-        requirement = next(item for item in requirements if item.id == match.requirement_id)
+            raise ModelOutputError(
+                "A positive requirement match has no source evidence."
+            )
+        requirement = next(
+            item for item in requirements if item.id == match.requirement_id
+        )
         criterion_ids = [item.criterion_id for item in match.criteria_matches]
-        if (
-            len(criterion_ids) != len(set(criterion_ids))
-            or set(criterion_ids) != {item.id for item in requirement.criteria}
-        ):
+        if len(criterion_ids) != len(set(criterion_ids)) or set(criterion_ids) != {
+            item.id for item in requirement.criteria
+        }:
             raise ModelOutputError("Matching must cover every criterion exactly once.")
         for criterion_match in match.criteria_matches:
             if (
-                len(criterion_match.evidence_ids) != len(set(criterion_match.evidence_ids))
+                len(criterion_match.evidence_ids)
+                != len(set(criterion_match.evidence_ids))
                 or not set(criterion_match.evidence_ids) <= available
             ):
                 raise ModelOutputError("A criterion match cites invalid CV evidence.")
-            if criterion_match.status in ("direct", "partial") and not criterion_match.evidence_ids:
-                raise ModelOutputError("A positive criterion match has no source evidence.")
+            if (
+                criterion_match.status in ("direct", "partial")
+                and not criterion_match.evidence_ids
+            ):
+                raise ModelOutputError(
+                    "A positive criterion match has no source evidence."
+                )
     by_id = {}
     for match in matches.matches:
         # Models sometimes cite inspected items when explaining a gap. These
         # references must never be treated as positive matching evidence.
         if match.status == "not_evidenced" and match.evidence_ids:
-            match = match.model_copy(update={
-                "inspected_evidence_ids": list(dict.fromkeys(
-                    [*match.inspected_evidence_ids, *match.evidence_ids]
-                )),
-                "evidence_ids": [],
-            })
+            match = match.model_copy(
+                update={
+                    "inspected_evidence_ids": list(
+                        dict.fromkeys(
+                            [*match.inspected_evidence_ids, *match.evidence_ids]
+                        )
+                    ),
+                    "evidence_ids": [],
+                }
+            )
         by_id[match.requirement_id] = match
     return [by_id[item.id] for item in requirements]
 
 
 def mentions(text: str, phrase: str) -> bool:
-    return bool(re.search(
-        r"(?<![\w+#])" + re.escape(normalized(phrase)) + r"(?![\w+#])",
-        normalized(text),
-    ))
+    return bool(
+        re.search(
+            r"(?<![\w+#])" + re.escape(normalized(phrase)) + r"(?![\w+#])",
+            normalized(text),
+        )
+    )
 
 
 NEGATIVE_EVIDENCE = re.compile(
     r"\b(?:no experience|not (?:used|using|worked)|never (?:used|worked)|"
     r"without experience|lack(?:ing)? (?:experience|knowledge)|unfamiliar)\b"
 )
-NON_PRODUCTION = re.compile(r"\b(?:non-production|not (?:in )?production|prototype only)\b")
+NON_PRODUCTION = re.compile(
+    r"\b(?:non-production|not (?:in )?production|prototype only)\b"
+)
 LANGUAGE_PROFICIENCY = re.compile(
     r"\b(?:proficien(?:t|cy)|fluen(?:t|cy)|native|c[12]|professional working|"
     r"full professional)\b"
@@ -975,16 +1089,19 @@ def language_proficiency_supported(clause: str, language: str) -> bool:
     return bool(
         re.search(r"\b" + level + r"\s+(?:in\s+)?" + name + r"\b", text)
         or re.search(
-            r"\b" + name
+            r"\b"
+            + name
             + r"\s*(?:[:(\-]\s*|is\s+|(?:language )?proficiency (?:at )?)?"
-            + level + r"\b",
+            + level
+            + r"\b",
             text,
         )
     )
 
 
 def explicit_criterion_match(
-    criterion: RequirementCriterion, evidence: list[EvidenceItem],
+    criterion: RequirementCriterion,
+    evidence: list[EvidenceItem],
 ) -> CriterionMatch:
     """Assess named options from actual CV text, never from model explanations."""
     option_matches = []
@@ -995,11 +1112,14 @@ def explicit_criterion_match(
             if item.section == "role":
                 continue
             for clause in re.split(r"[.;\n]", item.text):
-                if not mentions(clause, option) or NEGATIVE_EVIDENCE.search(normalized(clause)):
+                if not mentions(clause, option) or NEGATIVE_EVIDENCE.search(
+                    normalized(clause)
+                ):
                     continue
                 if criterion.kind == "language":
-                    direct = not criterion.proficiency or language_proficiency_supported(
-                        clause, option
+                    direct = (
+                        not criterion.proficiency
+                        or language_proficiency_supported(clause, option)
                     )
                 elif criterion.production:
                     direct = (
@@ -1008,19 +1128,22 @@ def explicit_criterion_match(
                         and not NON_PRODUCTION.search(normalized(clause))
                     )
                 else:
-                    direct = (
-                        item.section in ("experience", "ai_native")
-                        or not (
-                            criterion.experience_required
-                            or re.search(r"\bexperience\b", normalized(criterion.quote))
-                        )
+                    direct = item.section in ("experience", "ai_native") or not (
+                        criterion.experience_required
+                        or re.search(r"\bexperience\b", normalized(criterion.quote))
                     )
                 (direct_ids if direct else partial_ids).append(item.id)
-        option_matches.append((
-            option,
-            "direct" if direct_ids else "partial" if partial_ids else "not_evidenced",
-            list(dict.fromkeys(direct_ids or partial_ids)),
-        ))
+        option_matches.append(
+            (
+                option,
+                (
+                    "direct"
+                    if direct_ids
+                    else "partial" if partial_ids else "not_evidenced"
+                ),
+                list(dict.fromkeys(direct_ids or partial_ids)),
+            )
+        )
     direct = [entry for entry in option_matches if entry[1] == "direct"]
     supported = [entry for entry in option_matches if entry[1] != "not_evidenced"]
     if criterion.operator == "any":
@@ -1029,12 +1152,17 @@ def explicit_criterion_match(
     else:
         chosen = supported
         status = (
-            "direct" if len(direct) == len(option_matches)
+            "direct"
+            if len(direct) == len(option_matches)
             else "partial" if supported else "not_evidenced"
         )
-    source_ids = list(dict.fromkeys(source_id for _, _, ids in chosen for source_id in ids))
+    source_ids = list(
+        dict.fromkeys(source_id for _, _, ids in chosen for source_id in ids)
+    )
     if not supported:
-        explanation = "No explicit CV evidence for: " + ", ".join(criterion.options) + "."
+        explanation = (
+            "No explicit CV evidence for: " + ", ".join(criterion.options) + "."
+        )
     else:
         explanation = (
             f"{criterion.operator}-of options: "
@@ -1042,17 +1170,24 @@ def explicit_criterion_match(
             + "."
         )
     if criterion.production:
-        explanation += " Direct credit requires explicit production use in work experience."
+        explanation += (
+            " Direct credit requires explicit production use in work experience."
+        )
     if criterion.kind == "language":
-        explanation += " Communication or stakeholder work does not prove language proficiency."
+        explanation += (
+            " Communication or stakeholder work does not prove language proficiency."
+        )
     return CriterionMatch(
-        criterion_id=criterion.id, status=status,
-        evidence_ids=source_ids, explanation=explanation,
+        criterion_id=criterion.id,
+        status=status,
+        evidence_ids=source_ids,
+        explanation=explanation,
     )
 
 
 def enforce_match_rules(
-    requirements: list[Requirement], matches: list[RequirementMatch],
+    requirements: list[Requirement],
+    matches: list[RequirementMatch],
     evidence: list[EvidenceItem],
 ) -> list[RequirementMatch]:
     result = []
@@ -1090,31 +1225,55 @@ def enforce_match_rules(
             status = "unclear"
         else:
             status = "not_evidenced"
-        source_ids = list(dict.fromkeys(
-            source_id for decision in corrected
-            if decision.status in ("direct", "partial")
-            for source_id in decision.evidence_ids
-        ))
+        source_ids = list(
+            dict.fromkeys(
+                source_id
+                for decision in corrected
+                if decision.status in ("direct", "partial")
+                for source_id in decision.evidence_ids
+            )
+        )
         if status != match.status:
             adjustments.append(
                 f"Overall match: {match.status} -> {status} from explicit criterion coverage."
             )
-        result.append(match.model_copy(update={
-            "status": status,
-            "evidence_ids": source_ids if status in ("direct", "partial") else [],
-            "criteria_matches": corrected,
-            "rule_adjustments": adjustments,
-            "explanation": " ".join(
-                f"{criterion.text}: {decision.status}. {decision.explanation}"
-                for criterion, decision in zip(requirement.criteria, corrected)
-            ),
-        }))
+        result.append(
+            match.model_copy(
+                update={
+                    "status": status,
+                    "evidence_ids": (
+                        source_ids if status in ("direct", "partial") else []
+                    ),
+                    "criteria_matches": corrected,
+                    "rule_adjustments": adjustments,
+                    "explanation": " ".join(
+                        f"{criterion.text}: {decision.status}. {decision.explanation}"
+                        for criterion, decision in zip(requirement.criteria, corrected)
+                    ),
+                }
+            )
+        )
     return result
 
 
 RETRIEVAL_STOPWORDS = {
-    "a", "an", "and", "or", "the", "with", "in", "of", "for", "to", "such",
-    "as", "including", "experience", "strong", "skill", "knowledge",
+    "a",
+    "an",
+    "and",
+    "or",
+    "the",
+    "with",
+    "in",
+    "of",
+    "for",
+    "to",
+    "such",
+    "as",
+    "including",
+    "experience",
+    "strong",
+    "skill",
+    "knowledge",
 }
 RETRIEVAL_RELATED = {
     "communication": {"stakeholder", "collaboration", "collaborate", "partner"},
@@ -1133,7 +1292,8 @@ def retrieval_terms(text: str) -> set[str]:
 
 
 def retrieve_evidence(
-    criterion: RequirementCriterion, evidence: list[EvidenceItem],
+    criterion: RequirementCriterion,
+    evidence: list[EvidenceItem],
     related_ids: set[str],
 ) -> list[EvidenceItem]:
     terms = retrieval_terms(criterion.text)
@@ -1147,7 +1307,8 @@ def retrieve_evidence(
         ),
     )
     selected = [
-        item for item in ranked
+        item
+        for item in ranked
         if terms & retrieval_terms(item.text) or item.id in related_ids
     ][:6]
     if not selected:
@@ -1158,26 +1319,34 @@ def retrieve_evidence(
 
 
 def unkey_semantic_decisions(
-    response: str, criterion_aliases: dict[str, str] | None = None,
+    response: str,
+    criterion_aliases: dict[str, str] | None = None,
     evidence_aliases: dict[str, str] | None = None,
 ) -> str:
     try:
         payload = json.loads(response)
     except json.JSONDecodeError as exc:
-        raise ModelOutputError("Semantic matching returned invalid JSON.", response) from exc
+        raise ModelOutputError(
+            "Semantic matching returned invalid JSON.", response
+        ) from exc
     if not isinstance(payload, dict) or not isinstance(payload.get("decisions"), dict):
         return response
     for key, decision in payload["decisions"].items():
         criterion_id = (criterion_aliases or {}).get(key, key)
-        if (
-            not isinstance(decision, dict)
-            or decision.get("criterion_id", criterion_id) not in (key, criterion_id)
-        ):
-            raise ModelOutputError("A semantic decision has an inconsistent ID.", response)
+        if not isinstance(decision, dict) or decision.get(
+            "criterion_id", criterion_id
+        ) not in (key, criterion_id):
+            raise ModelOutputError(
+                "A semantic decision has an inconsistent ID.", response
+            )
         decision["criterion_id"] = criterion_id
         if isinstance(decision.get("evidence_ids"), list):
-            if not all(isinstance(source_id, str) for source_id in decision["evidence_ids"]):
-                raise ModelOutputError("Semantic evidence IDs must be strings.", response)
+            if not all(
+                isinstance(source_id, str) for source_id in decision["evidence_ids"]
+            ):
+                raise ModelOutputError(
+                    "Semantic evidence IDs must be strings.", response
+                )
             decision["evidence_ids"] = [
                 (evidence_aliases or {}).get(source_id, source_id)
                 for source_id in decision["evidence_ids"]
@@ -1194,11 +1363,15 @@ def unkey_semantic_decisions(
 
 
 def semantic_decisions(
-    llm: Runnable, tasks: list[dict], candidates: dict[str, list[EvidenceItem]],
+    llm: Runnable,
+    tasks: list[dict],
+    candidates: dict[str, list[EvidenceItem]],
 ) -> list[CriterionMatch]:
     criterion_aliases = {f"c{index}": task["id"] for index, task in enumerate(tasks)}
     originals = {item.id: item for items in candidates.values() for item in items}
-    evidence_aliases = {f"e{index}": source_id for index, source_id in enumerate(originals)}
+    evidence_aliases = {
+        f"e{index}": source_id for index, source_id in enumerate(originals)
+    }
     source_aliases = {source_id: alias for alias, source_id in evidence_aliases.items()}
     keyed = {}
     compact_tasks = []
@@ -1223,16 +1396,25 @@ def semantic_decisions(
         compact_tasks.append(compact)
     schema = {
         "type": "object",
-        "properties": {"decisions": {
-            "type": "object", "properties": keyed,
-            "required": list(keyed), "additionalProperties": False,
-        }},
-        "required": ["decisions"], "additionalProperties": False,
+        "properties": {
+            "decisions": {
+                "type": "object",
+                "properties": keyed,
+                "required": list(keyed),
+                "additionalProperties": False,
+            }
+        },
+        "required": ["decisions"],
+        "additionalProperties": False,
     }
     evidence = {
         alias: {
             "text": originals[source_id].text,
-            **({"context": originals[source_id].context} if originals[source_id].context else {}),
+            **(
+                {"context": originals[source_id].context}
+                if originals[source_id].context
+                else {}
+            ),
         }
         for alias, source_id in evidence_aliases.items()
     }
@@ -1256,25 +1438,35 @@ def semantic_decisions(
     )
 
     def assess(stage: str, review: bool) -> list[CriterionMatch]:
-        prompt = ("Independently verify and correct proposed decisions. " if review else "") + instruction
+        prompt = (
+            "Independently verify and correct proposed decisions. " if review else ""
+        ) + instruction
         for attempt in range(2):
             try:
                 response = request(
-                    llm, SemanticDecisions, prompt, data, json_schema=schema,
+                    llm,
+                    SemanticDecisions,
+                    prompt,
+                    data,
+                    json_schema=schema,
                     transform_response=lambda reply: unkey_semantic_decisions(
                         reply, criterion_aliases, evidence_aliases
                     ),
                     stage=stage,
                 )
                 ids = [item.criterion_id for item in response.decisions]
-                if len(set(ids)) != len(ids) or set(ids) != set(criterion_aliases.values()):
-                    raise ModelOutputError("Semantic decisions must cover every criterion once.")
+                if len(set(ids)) != len(ids) or set(ids) != set(
+                    criterion_aliases.values()
+                ):
+                    raise ModelOutputError(
+                        "Semantic decisions must cover every criterion once."
+                    )
                 corrected = []
                 for decision in response.decisions:
                     allowed = {item.id for item in candidates[decision.criterion_id]}
-                    if (
-                        not set(decision.evidence_ids) <= allowed
-                        or (decision.status in ("direct", "partial") and not decision.evidence_ids)
+                    if not set(decision.evidence_ids) <= allowed or (
+                        decision.status in ("direct", "partial")
+                        and not decision.evidence_ids
                     ):
                         raise ModelOutputError(
                             f"Semantic decision {decision.criterion_id} ({decision.status}) "
@@ -1286,9 +1478,14 @@ def semantic_decisions(
                         explanation += " Repeated citations were deduplicated."
                     if decision.status not in ("direct", "partial"):
                         ids = []
-                    corrected.append(decision.model_copy(update={
-                        "evidence_ids": ids, "explanation": explanation,
-                    }))
+                    corrected.append(
+                        decision.model_copy(
+                            update={
+                                "evidence_ids": ids,
+                                "explanation": explanation,
+                            }
+                        )
+                    )
                 return corrected
             except ModelOutputError as exc:
                 if attempt == 1:
@@ -1302,7 +1499,8 @@ def semantic_decisions(
         alias: {
             "status": by_id[criterion_id].status,
             "evidence_ids": [
-                source_aliases[source_id] for source_id in by_id[criterion_id].evidence_ids
+                source_aliases[source_id]
+                for source_id in by_id[criterion_id].evidence_ids
             ],
             "explanation": by_id[criterion_id].explanation,
         }
@@ -1313,32 +1511,42 @@ def semantic_decisions(
 
 SEMANTIC_ANCHORS = (
     (r"\bagentic\b", "agentic capabilities", r"\b(?:agentic|agents?|autonomous)\b"),
-    (r"\bci/cd\b", "CI/CD", r"\b(?:ci/cd|continuous integration|continuous (?:delivery|deployment))\b"),
+    (
+        r"\bci/cd\b",
+        "CI/CD",
+        r"\b(?:ci/cd|continuous integration|continuous (?:delivery|deployment))\b",
+    ),
     (r"\bdebugging\b", "debugging", r"\b(?:debug(?:ged|ging)?|troubleshoot(?:ing)?)\b"),
 )
 
 
 def guard_semantic_decision(
-    criterion: RequirementCriterion, decision: CriterionMatch,
+    criterion: RequirementCriterion,
+    decision: CriterionMatch,
     evidence: list[EvidenceItem],
 ) -> CriterionMatch:
     if decision.status != "direct":
         return decision
     quoted = normalized(criterion.text + " " + criterion.quote)
-    cited = normalized(" ".join(
-        item.text for item in evidence if item.id in decision.evidence_ids
-    ))
+    cited = normalized(
+        " ".join(item.text for item in evidence if item.id in decision.evidence_ids)
+    )
     missing = [
-        label for required, label, supported in SEMANTIC_ANCHORS
+        label
+        for required, label, supported in SEMANTIC_ANCHORS
         if re.search(required, quoted) and not re.search(supported, cited)
     ]
     if not missing:
         return decision
-    return decision.model_copy(update={
-        "status": "partial",
-        "explanation": decision.explanation + " Direct credit withheld: explicit "
-        + ", ".join(missing) + " evidence is absent from the cited CV statements.",
-    })
+    return decision.model_copy(
+        update={
+            "status": "partial",
+            "explanation": decision.explanation
+            + " Direct credit withheld: explicit "
+            + ", ".join(missing)
+            + " evidence is absent from the cited CV statements.",
+        }
+    )
 
 
 def match_job(
@@ -1354,34 +1562,44 @@ def match_job(
             )
         explicit = [
             explicit_criterion_match(criterion, evidence)
-            for criterion in requirement.criteria if criterion.kind != "general"
+            for criterion in requirement.criteria
+            if criterion.kind != "general"
         ]
         known.update((decision.criterion_id, decision) for decision in explicit)
-        related_ids = {source_id for decision in explicit for source_id in decision.evidence_ids}
+        related_ids = {
+            source_id for decision in explicit for source_id in decision.evidence_ids
+        }
         for criterion in requirement.criteria:
             if criterion.kind == "general":
                 selected = retrieve_evidence(criterion, evidence, related_ids)
                 candidates[criterion.id] = selected
-                tasks.append({
-                    "id": criterion.id, "text": criterion.text,
-                    "job_quote": criterion.quote,
-                    "candidate_evidence_ids": [item.id for item in selected],
-                })
+                tasks.append(
+                    {
+                        "id": criterion.id,
+                        "text": criterion.text,
+                        "job_quote": criterion.quote,
+                        "candidate_evidence_ids": [item.id for item in selected],
+                    }
+                )
     if tasks:
         # Bound the compact semantic workload, rather than repeatedly assessing
         # already-resolved tools/languages against the complete CV.
         for offset in range(0, len(tasks), 12):
-            batch = tasks[offset:offset + 12]
+            batch = tasks[offset : offset + 12]
             ids = {item["id"] for item in batch}
             known.update(
                 (decision.criterion_id, decision)
                 for decision in semantic_decisions(
-                    llm, batch, {key: value for key, value in candidates.items() if key in ids}
+                    llm,
+                    batch,
+                    {key: value for key, value in candidates.items() if key in ids},
                 )
             )
     combined = [
         RequirementMatch(
-            requirement_id=requirement.id, status="unclear", evidence_ids=[],
+            requirement_id=requirement.id,
+            status="unclear",
+            evidence_ids=[],
             explanation="Aggregating explicit and reviewed semantic criteria.",
             criteria_matches=[known[item.id] for item in requirement.criteria],
         )
@@ -1400,15 +1618,23 @@ def score_matches(
     def score(items: list[Requirement]) -> float | None:
         if not items:
             return None
-        credits = {"direct": 1, "partial": rubric.partial_credit,
-                   "not_evidenced": 0, "unclear": 0}
+        credits = {
+            "direct": 1,
+            "partial": rubric.partial_credit,
+            "not_evidenced": 0,
+            "unclear": 0,
+        }
         numerator = sum(
             rubric.weight(item) * credits[by_id[item.id].status] for item in items
         )
         return round(100 * numerator / sum(rubric.weight(item) for item in items), 1)
 
     return score(requirements), score(
-        [item for item in requirements if item.importance in ("required", "eligibility")]
+        [
+            item
+            for item in requirements
+            if item.importance in ("required", "eligibility")
+        ]
     )
 
 
@@ -1438,16 +1664,26 @@ def select_evidence(report: TailoringReport) -> list[EvidenceItem]:
     selected = []
     limits = {"skills": MAX_SKILLS, "ai_native": MAX_AI_NATIVE}
     for section, limit in limits.items():
-        items = [item for item in report.evidence
-                 if item.section == section and relevance.get(item.id, 0) > 0]
-        selected.extend(sorted(
-            items, key=lambda item: (item.id not in named_skills, -relevance[item.id])
-        )[:limit])
-    roles = sorted({item.role_index for item in report.evidence
-                    if item.section == "experience"})
+        items = [
+            item
+            for item in report.evidence
+            if item.section == section and relevance.get(item.id, 0) > 0
+        ]
+        selected.extend(
+            sorted(
+                items,
+                key=lambda item: (item.id not in named_skills, -relevance[item.id]),
+            )[:limit]
+        )
+    roles = sorted(
+        {item.role_index for item in report.evidence if item.section == "experience"}
+    )
     for role_index in roles:
-        items = [item for item in report.evidence
-                 if item.section == "experience" and item.role_index == role_index]
+        items = [
+            item
+            for item in report.evidence
+            if item.section == "experience" and item.role_index == role_index
+        ]
         relevant = [item for item in items if relevance.get(item.id, 0) > 0]
         if relevant:
             anchors = {}
@@ -1488,7 +1724,9 @@ def mechanical_rejection(sentence: DraftSentence, sources: list[EvidenceItem]) -
     source = "\n".join(item.text + "\n" + item.context for item in sources)
     new_numbers = set(NUMBERS.findall(sentence.text)) - set(NUMBERS.findall(source))
     if new_numbers:
-        return "New numerical claims absent from cited evidence: " + ", ".join(sorted(new_numbers))
+        return "New numerical claims absent from cited evidence: " + ", ".join(
+            sorted(new_numbers)
+        )
     terms = unsupported_terms(sentence.text, source)
     if terms:
         return "Named terms absent from cited evidence: " + ", ".join(terms)
@@ -1499,38 +1737,53 @@ def mechanical_rejection(sentence: DraftSentence, sources: list[EvidenceItem]) -
     return ""
 
 
-def rewrite_schema(targets: list[EvidenceItem], summary_ids: list[str], summary: bool) -> dict:
+def rewrite_schema(
+    targets: list[EvidenceItem], summary_ids: list[str], summary: bool
+) -> dict:
     text = {"type": "string", "minLength": 1, "pattern": r"\S"}
     bullets = {}
     for target in targets:
         bullets[target.id] = {
-            "type": "object", "additionalProperties": False,
+            "type": "object",
+            "additionalProperties": False,
             "required": ["source_ids", "text"],
             "properties": {
                 "source_ids": {
-                    "type": "array", "minItems": 1, "maxItems": 1,
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1,
                     "items": {"type": "string", "enum": [target.id]},
                 },
                 "text": text,
             },
         }
     return {
-        "type": "object", "additionalProperties": False,
+        "type": "object",
+        "additionalProperties": False,
         "required": ["bullets", "summary_sentences"],
         "properties": {
             "bullets": {
-                "type": "object", "additionalProperties": False,
-                "required": list(bullets), "properties": bullets,
+                "type": "object",
+                "additionalProperties": False,
+                "required": list(bullets),
+                "properties": bullets,
             },
             "summary_sentences": {
-                "type": "array", "maxItems": 4 if summary else 0,
+                "type": "array",
+                "maxItems": 4 if summary else 0,
                 "items": {
-                    "type": "object", "additionalProperties": False,
+                    "type": "object",
+                    "additionalProperties": False,
                     "required": ["id", "source_ids", "text"],
                     "properties": {
-                        "id": {"type": "string", "enum": [f"summary/{i}" for i in range(4)]},
+                        "id": {
+                            "type": "string",
+                            "enum": [f"summary/{i}" for i in range(4)],
+                        },
                         "source_ids": {
-                            "type": "array", "minItems": 1, "uniqueItems": True,
+                            "type": "array",
+                            "minItems": 1,
+                            "uniqueItems": True,
                             "items": {"type": "string", "enum": summary_ids},
                         },
                         "text": text,
@@ -1543,19 +1796,29 @@ def rewrite_schema(targets: list[EvidenceItem], summary_ids: list[str], summary:
 
 def rewrite_review_schema(ids: list[str]) -> dict:
     verdict = {
-        "type": "object", "additionalProperties": False,
+        "type": "object",
+        "additionalProperties": False,
         "required": ["status", "reason"],
         "properties": {
-            "status": {"type": "string", "enum": ["supported", "unsupported", "unclear"]},
+            "status": {
+                "type": "string",
+                "enum": ["supported", "unsupported", "unclear"],
+            },
             "reason": {"type": "string", "minLength": 1, "pattern": r"\S"},
         },
     }
     return {
-        "type": "object", "additionalProperties": False, "required": ["verdicts"],
-        "properties": {"verdicts": {
-            "type": "object", "additionalProperties": False,
-            "required": ids, "properties": {sid: verdict for sid in ids},
-        }},
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["verdicts"],
+        "properties": {
+            "verdicts": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ids,
+                "properties": {sid: verdict for sid in ids},
+            }
+        },
     }
 
 
@@ -1571,7 +1834,7 @@ def capture_rewrite_response(raw: list[str], response: str) -> str:
 
     try:
         return json.dumps(json.loads(response, object_pairs_hook=unique_pairs))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return response
 
 
@@ -1588,9 +1851,8 @@ def rewrite(
     data = {
         "job_description": description,
         "bullet_targets": [item.model_dump() for item in targets],
-        "summary_evidence": [
-            item.model_dump() for item in selected
-        ] + [item.model_dump() for item in report.evidence if item.section == "summary"],
+        "summary_evidence": [item.model_dump() for item in selected]
+        + [item.model_dump() for item in report.evidence if item.section == "summary"],
     }
     summary_sources = {item["id"] for item in data["summary_evidence"]}
     raw_draft: list[str] = []
@@ -1602,12 +1864,18 @@ def rewrite(
     summary_invalid = False
     summary_mechanical_rejection = False
 
-    def record_audit(target: str, sources: list[str], proposed: str, status: str, reason: str):
+    def record_audit(
+        target: str, sources: list[str], proposed: str, status: str, reason: str
+    ):
         original = cv.summary if target == "summary" else originals[target].text
         entry = RewriteAudit(
-            target_id=target, source_ids=sources, original=original,
-            proposed=proposed, exported=proposed if status == "accepted" else original,
-            status=status, reason=reason,
+            target_id=target,
+            source_ids=sources,
+            original=original,
+            proposed=proposed,
+            exported=proposed if status == "accepted" else original,
+            status=status,
+            reason=reason,
         )
         audits.append(entry)
         return entry
@@ -1650,10 +1918,13 @@ def rewrite(
             ),
             data,
             json_schema=rewrite_schema(
-                targets, sorted({item["id"] for item in data["summary_evidence"]}),
+                targets,
+                sorted({item["id"] for item in data["summary_evidence"]}),
                 description is not None,
             ),
-            transform_response=lambda response: capture_rewrite_response(raw_draft, response),
+            transform_response=lambda response: capture_rewrite_response(
+                raw_draft, response
+            ),
             stage="rewriting",
         )
     except ModelOutputError as exc:
@@ -1662,14 +1933,31 @@ def rewrite(
         for item in targets:
             record_audit(item.id, [item.id], "", "unclear", problems[-1])
         if description is not None:
-            record_audit("summary", ["summary/0"] if cv.summary else [], "", "unclear", problems[-1])
+            record_audit(
+                "summary",
+                ["summary/0"] if cv.summary else [],
+                "",
+                "unclear",
+                problems[-1],
+            )
         draft = None
 
     if draft is not None:
         entries = [
-            {**value, "id": target, "target_id": target,
-             **({"invalid_keyed_fields": True} if set(value) - {"source_ids", "text"} else {})}
-            if isinstance(value, dict) else {"target_id": target}
+            (
+                {
+                    **value,
+                    "id": target,
+                    "target_id": target,
+                    **(
+                        {"invalid_keyed_fields": True}
+                        if set(value) - {"source_ids", "text"}
+                        else {}
+                    ),
+                }
+                if isinstance(value, dict)
+                else {"target_id": target}
+            )
             for target, value in draft.bullets.items()
         ]
         entries += [
@@ -1698,10 +1986,16 @@ def rewrite(
             summary_invalid = True
             problems.append("The proposed summary exceeds four sentences.")
 
-        for target in [item.id for item in targets] + (["summary"] if "summary" in grouped else []):
+        for target in [item.id for item in targets] + (
+            ["summary"] if "summary" in grouped else []
+        ):
             values = grouped.get(target, [])
             if target != "summary" and len(values) != 1:
-                reason = "Missing bullet target." if not values else "Duplicate bullet target."
+                reason = (
+                    "Missing bullet target."
+                    if not values
+                    else "Duplicate bullet target."
+                )
                 problems.append(f"{target}: {reason}")
                 record_audit(target, [target], "", "unclear", reason)
                 continue
@@ -1712,12 +2006,19 @@ def rewrite(
                     if id_counts[sentence.id] != 1:
                         raise ValueError("Duplicate sentence ID.")
                     if target == "summary":
-                        if description is None or not set(sentence.source_ids) <= summary_sources:
-                            raise ValueError("Summary cites evidence outside its allowed sources.")
+                        if (
+                            description is None
+                            or not set(sentence.source_ids) <= summary_sources
+                        ):
+                            raise ValueError(
+                                "Summary cites evidence outside its allowed sources."
+                            )
                         if len(set(sentence.source_ids)) != len(sentence.source_ids):
                             raise ValueError("Duplicate summary source IDs.")
                     elif sentence.source_ids != [target]:
-                        raise ValueError("Bullet rewrite must cite only its original bullet.")
+                        raise ValueError(
+                            "Bullet rewrite must cite only its original bullet."
+                        )
                 except (ValidationError, ValueError) as exc:
                     reason = f"Invalid target entry: {exc}"
                     problems.append(f"{target}: {reason}")
@@ -1725,14 +2026,23 @@ def rewrite(
                     proposed = value.get("text", "")
                     record_audit(
                         target,
-                        sentence.source_ids if sentence else (
-                            sources if isinstance(sources, list)
-                            and all(isinstance(sid, str) for sid in sources) else []
+                        (
+                            sentence.source_ids
+                            if sentence
+                            else (
+                                sources
+                                if isinstance(sources, list)
+                                and all(isinstance(sid, str) for sid in sources)
+                                else []
+                            )
                         ),
-                        sentence.text if sentence else (
-                            proposed if isinstance(proposed, str) else ""
+                        (
+                            sentence.text
+                            if sentence
+                            else (proposed if isinstance(proposed, str) else "")
                         ),
-                        "unclear", reason,
+                        "unclear",
+                        reason,
                     )
                     summary_invalid |= target == "summary"
                     continue
@@ -1742,24 +2052,43 @@ def rewrite(
                     sentence, [originals[sid] for sid in sentence.source_ids]
                 )
                 if rejection:
-                    record_audit(target, sentence.source_ids, sentence.text, "rejected", rejection)
-                    report.invalid_rewrite_response = raw_draft[-1] if raw_draft else draft.model_dump_json()
+                    record_audit(
+                        target,
+                        sentence.source_ids,
+                        sentence.text,
+                        "rejected",
+                        rejection,
+                    )
+                    report.invalid_rewrite_response = (
+                        raw_draft[-1] if raw_draft else draft.model_dump_json()
+                    )
                     summary_invalid |= target == "summary"
                     summary_mechanical_rejection |= target == "summary"
                 elif target != "summary" and sentence.text == originals[target].text:
-                    record_audit(target, sentence.source_ids, sentence.text, "accepted", "Unchanged source.")
+                    record_audit(
+                        target,
+                        sentence.source_ids,
+                        sentence.text,
+                        "accepted",
+                        "Unchanged source.",
+                    )
                 else:
                     candidates.append(sentence)
         if problems:
-            report.invalid_rewrite_response = raw_draft[-1] if raw_draft else draft.model_dump_json()
+            report.invalid_rewrite_response = (
+                raw_draft[-1] if raw_draft else draft.model_dump_json()
+            )
 
     verdicts: dict[str, SentenceVerdict] = {}
     if candidates:
         review_problem_count = len(problems)
-        review_data = [{
-            "sentence": sentence.model_dump(),
-            "sources": [originals[sid].model_dump() for sid in sentence.source_ids],
-        } for sentence in candidates]
+        review_data = [
+            {
+                "sentence": sentence.model_dump(),
+                "sources": [originals[sid].model_dump() for sid in sentence.source_ids],
+            }
+            for sentence in candidates
+        ]
         try:
             review = request(
                 llm,
@@ -1777,13 +2106,25 @@ def rewrite(
                 "without reading them. Explain the verdict.",
                 {"entries": review_data},
                 json_schema=rewrite_review_schema([item.id for item in candidates]),
-                transform_response=lambda response: capture_rewrite_response(raw_review, response),
+                transform_response=lambda response: capture_rewrite_response(
+                    raw_review, response
+                ),
                 stage="rewrite_review",
             )
             entries = [
-                {**value, "id": sid,
-                 **({"invalid_keyed_fields": True} if set(value) - {"status", "reason"} else {})}
-                if isinstance(value, dict) else {"id": sid}
+                (
+                    {
+                        **value,
+                        "id": sid,
+                        **(
+                            {"invalid_keyed_fields": True}
+                            if set(value) - {"status", "reason"}
+                            else {}
+                        ),
+                    }
+                    if isinstance(value, dict)
+                    else {"id": sid}
+                )
                 for sid, value in review.verdicts.items()
             ]
             grouped_verdicts: dict[str, list[object]] = {}
@@ -1791,24 +2132,38 @@ def rewrite(
                 if isinstance(entry, dict) and isinstance(entry.get("id"), str):
                     grouped_verdicts.setdefault(entry["id"], []).append(entry)
                 else:
-                    problems.append("Malformed review verdict without an identifiable ID.")
+                    problems.append(
+                        "Malformed review verdict without an identifiable ID."
+                    )
             for sentence in candidates:
                 values = grouped_verdicts.get(sentence.id, [])
                 try:
                     if len(values) != 1:
-                        raise ValueError("Missing review verdict." if not values else "Duplicate review verdict ID.")
+                        raise ValueError(
+                            "Missing review verdict."
+                            if not values
+                            else "Duplicate review verdict ID."
+                        )
                     verdicts[sentence.id] = SentenceVerdict.model_validate(values[0])
                 except (ValidationError, ValueError) as exc:
                     verdicts[sentence.id] = SentenceVerdict(
-                        id=sentence.id, status="unclear", reason=f"Invalid review: {exc}"
+                        id=sentence.id,
+                        status="unclear",
+                        reason=f"Invalid review: {exc}",
                     )
                     problems.append(f"{sentence.id}: {exc}")
-                    report.invalid_review_response = raw_review[-1] if raw_review else review.model_dump_json()
+                    report.invalid_review_response = (
+                        raw_review[-1] if raw_review else review.model_dump_json()
+                    )
             if set(grouped_verdicts) - {item.id for item in candidates}:
                 problems.append("Review included unexpected sentence IDs.")
-                report.invalid_review_response = raw_review[-1] if raw_review else review.model_dump_json()
+                report.invalid_review_response = (
+                    raw_review[-1] if raw_review else review.model_dump_json()
+                )
         except ModelOutputError as exc:
-            report.invalid_review_response = raw_review[-1] if raw_review else exc.response
+            report.invalid_review_response = (
+                raw_review[-1] if raw_review else exc.response
+            )
             problems.append(f"Rewrite review failed: {exc}")
             verdicts = {
                 item.id: SentenceVerdict(id=item.id, status="unclear", reason=str(exc))
@@ -1818,32 +2173,57 @@ def rewrite(
             report.invalid_review_response = raw_review[-1]
         for sentence in candidates:
             verdict = verdicts[sentence.id]
-            status = {"supported": "accepted", "unsupported": "rejected", "unclear": "unclear"}[verdict.status]
-            record_audit(sentence.target_id, sentence.source_ids, sentence.text, status, verdict.reason)
+            status = {
+                "supported": "accepted",
+                "unsupported": "rejected",
+                "unclear": "unclear",
+            }[verdict.status]
+            record_audit(
+                sentence.target_id,
+                sentence.source_ids,
+                sentence.text,
+                status,
+                verdict.reason,
+            )
 
-    accepted_summary = bool(summaries) and not summary_invalid and all(
-        entry.status == "accepted" for entry in audits if entry.target_id == "summary"
+    accepted_summary = (
+        bool(summaries)
+        and not summary_invalid
+        and all(
+            entry.status == "accepted"
+            for entry in audits
+            if entry.target_id == "summary"
+        )
     )
     if description is not None and summary_mechanical_rejection and summary_sources:
         retry_audits: list[RewriteAudit] = []
         retry_raw: list[str] = []
         retry_review_started = False
         retry_schema = {
-            "type": "object", "additionalProperties": False,
+            "type": "object",
+            "additionalProperties": False,
             "required": ["summary_sentences"],
             "properties": {
                 "summary_sentences": {
-                    **rewrite_schema([], sorted(summary_sources), True)["properties"]["summary_sentences"],
-                    "minItems": 1, "maxItems": 1,
+                    **rewrite_schema([], sorted(summary_sources), True)["properties"][
+                        "summary_sentences"
+                    ],
+                    "minItems": 1,
+                    "maxItems": 1,
                 },
             },
         }
-        retry_schema["properties"]["summary_sentences"]["items"]["properties"]["text"] = {
-            "type": "string", "minLength": 1, "pattern": r"^[^0-9]*\S[^0-9]*$",
+        retry_schema["properties"]["summary_sentences"]["items"]["properties"][
+            "text"
+        ] = {
+            "type": "string",
+            "minLength": 1,
+            "pattern": r"^[^0-9]*\S[^0-9]*$",
         }
         try:
             retry = request(
-                llm, SummaryDraft,
+                llm,
+                SummaryDraft,
                 "The previous proposed summary was not fully supported or was missing. "
                 "Propose ONE concise summary sentence with id summary/0, citing only "
                 "the supplied candidate evidence. The job is context, not evidence. "
@@ -1859,12 +2239,14 @@ def rewrite(
                     "summary_evidence": data["summary_evidence"],
                     "previous_failures": [
                         audit.reason
-                        for audit in audits if audit.target_id == "summary"
-                        and audit.status != "accepted"
+                        for audit in audits
+                        if audit.target_id == "summary" and audit.status != "accepted"
                     ],
                 },
                 json_schema=retry_schema,
-                transform_response=lambda response: capture_rewrite_response(retry_raw, response),
+                transform_response=lambda response: capture_rewrite_response(
+                    retry_raw, response
+                ),
                 stage="rewriting",
             )
             if len(retry.summary_sentences) != 1:
@@ -1883,40 +2265,74 @@ def rewrite(
                 sentence, [originals[sid] for sid in sentence.source_ids]
             )
             if rejection:
-                retry_audits.append(record_audit(
-                    "summary", sentence.source_ids, sentence.text, "rejected", rejection
-                ))
+                retry_audits.append(
+                    record_audit(
+                        "summary",
+                        sentence.source_ids,
+                        sentence.text,
+                        "rejected",
+                        rejection,
+                    )
+                )
             elif sentence.text == cv.summary and sentence.source_ids == ["summary/0"]:
-                retry_audits.append(record_audit(
-                    "summary", sentence.source_ids, sentence.text, "accepted", "Unchanged source."
-                ))
+                retry_audits.append(
+                    record_audit(
+                        "summary",
+                        sentence.source_ids,
+                        sentence.text,
+                        "accepted",
+                        "Unchanged source.",
+                    )
+                )
             else:
                 retry_review_started = True
                 review = request(
-                    llm, Review,
+                    llm,
+                    Review,
                     "Independently check EVERY claim in this summary against ONLY "
                     "its cited candidate evidence. Supported requires every claim "
                     "to be explicitly entailed; reject altered or invented facts.",
-                    {"entries": [{
-                        "sentence": sentence.model_dump(),
-                        "sources": [originals[sid].model_dump() for sid in sentence.source_ids],
-                    }]},
+                    {
+                        "entries": [
+                            {
+                                "sentence": sentence.model_dump(),
+                                "sources": [
+                                    originals[sid].model_dump()
+                                    for sid in sentence.source_ids
+                                ],
+                            }
+                        ]
+                    },
                     json_schema=rewrite_review_schema([sentence.id]),
-                    transform_response=lambda response: capture_rewrite_response(raw_review, response),
+                    transform_response=lambda response: capture_rewrite_response(
+                        raw_review, response
+                    ),
                     stage="rewrite_review",
                 )
                 if set(review.verdicts) != {sentence.id}:
-                    raise ModelOutputError("Summary retry review must cover exactly one sentence.")
+                    raise ModelOutputError(
+                        "Summary retry review must cover exactly one sentence."
+                    )
                 value = review.verdicts[sentence.id]
                 if not isinstance(value, dict):
-                    raise ModelOutputError("Summary retry review has an invalid verdict.")
+                    raise ModelOutputError(
+                        "Summary retry review has an invalid verdict."
+                    )
                 verdict = SentenceVerdict.model_validate({**value, "id": sentence.id})
                 status = {
-                    "supported": "accepted", "unsupported": "rejected", "unclear": "unclear"
+                    "supported": "accepted",
+                    "unsupported": "rejected",
+                    "unclear": "unclear",
                 }[verdict.status]
-                retry_audits.append(record_audit(
-                    "summary", sentence.source_ids, sentence.text, status, verdict.reason
-                ))
+                retry_audits.append(
+                    record_audit(
+                        "summary",
+                        sentence.source_ids,
+                        sentence.text,
+                        status,
+                        verdict.reason,
+                    )
+                )
         except (ModelOutputError, ValidationError) as exc:
             if retry_review_started and raw_review:
                 report.invalid_review_response = raw_review[-1]
@@ -1927,17 +2343,29 @@ def rewrite(
             summaries = [sentence]
             accepted_summary = True
             for audit in audits:
-                if audit not in retry_audits and audit.target_id == "summary" and audit.status == "accepted":
+                if (
+                    audit not in retry_audits
+                    and audit.target_id == "summary"
+                    and audit.status == "accepted"
+                ):
                     audit.status = "unclear"
                     audit.reason = "Superseded by the accepted summary retry."
                     audit.exported = cv.summary
         elif retry_audits:
             for audit in retry_audits:
                 audit.exported = cv.summary
-    output_bullets = {entry.target_id: entry.exported for entry in audits if entry.target_id != "summary"}
-    summary = " ".join(item.text for item in summaries) if accepted_summary else cv.summary
+    output_bullets = {
+        entry.target_id: entry.exported
+        for entry in audits
+        if entry.target_id != "summary"
+    }
+    summary = (
+        " ".join(item.text for item in summaries) if accepted_summary else cv.summary
+    )
     if description is not None and not accepted_summary:
-        report.warnings.append("Kept the source summary: proposed summary was missing or not fully supported.")
+        report.warnings.append(
+            "Kept the source summary: proposed summary was missing or not fully supported."
+        )
         for audit in audits:
             if audit.target_id == "summary":
                 audit.exported = cv.summary
@@ -1945,20 +2373,28 @@ def rewrite(
                     audit.status = "unclear"
                     audit.reason = "Source summary kept because another summary sentence failed review."
         if not any(entry.target_id == "summary" for entry in audits):
-            record_audit("summary", ["summary/0"] if cv.summary else [], "", "unclear",
-                  "No summary sentences were proposed.")
+            record_audit(
+                "summary",
+                ["summary/0"] if cv.summary else [],
+                "",
+                "unclear",
+                "No summary sentences were proposed.",
+            )
     report.rewrites.extend(audits)
     report.warnings.extend(problems)
     for audit in audits:
         if audit.status != "accepted":
             report.warnings.append(f"Kept original {audit.target_id}: {audit.reason}")
     experience = [
-        role.model_copy(update={
-            "bullets": [
-                output_bullets.get(item.id, item.text) for item in targets
-                if item.role_index == index
-            ]
-        })
+        role.model_copy(
+            update={
+                "bullets": [
+                    output_bullets.get(item.id, item.text)
+                    for item in targets
+                    if item.role_index == index
+                ]
+            }
+        )
         for index, role in enumerate(cv.experience)
     ]
     if diagnostics is not None:
@@ -1992,16 +2428,26 @@ def _tailor_with_report(
     effective_rubric = rubric or ScoringRubric()
     with measure_stage("matching"):
         matches, matching_fingerprint, matching_hit = get_cached_matches(
-            cv, description, job, evidence, llm, cache_dir=matching_cache,
-            model_identity=model_identity, rubric=effective_rubric,
+            cv,
+            description,
+            job,
+            evidence,
+            llm,
+            cache_dir=matching_cache,
+            model_identity=model_identity,
+            rubric=effective_rubric,
             refresh=refresh_matching or refresh_job_analysis,
         )
     report = TailoringReport(
-        requirements=job.requirements, evidence=evidence, matches=matches,
+        requirements=job.requirements,
+        evidence=evidence,
+        matches=matches,
         rubric=effective_rubric,
-        job_fingerprint=fingerprint, job_analysis_cached=cache_hit,
+        job_fingerprint=fingerprint,
+        job_analysis_cached=cache_hit,
         matching_fingerprint=matching_fingerprint,
-        matching_analysis_cached=matching_hit, model_identity=model_identity,
+        matching_analysis_cached=matching_hit,
+        model_identity=model_identity,
     )
     if diagnostics is not None:
         diagnostics.report = report
@@ -2009,51 +2455,77 @@ def _tailor_with_report(
         job.requirements, matches, report.rubric
     )
     report.unresolved_eligibility_ids = [
-        match.requirement_id for requirement, match in zip(job.requirements, matches)
+        match.requirement_id
+        for requirement, match in zip(job.requirements, matches)
         if requirement.importance == "eligibility" and match.status != "direct"
     ]
     report.warnings.extend(
         f"{match.requirement_id}: non-supporting references are recorded only "
         "as inspected evidence, not as a positive match."
-        for match in matches if match.status == "not_evidenced" and match.inspected_evidence_ids
+        for match in matches
+        if match.status == "not_evidenced" and match.inspected_evidence_ids
     )
     if not job.requirements:
-        report.warnings.append("Insufficient information: no assessable job requirements.")
+        report.warnings.append(
+            "Insufficient information: no assessable job requirements."
+        )
         report.selected_evidence_ids = [
-            item.id for item in evidence if item.section in ("skills", "ai_native", "experience")
+            item.id
+            for item in evidence
+            if item.section in ("skills", "ai_native", "experience")
         ]
         return cv.model_copy(deep=True), report
     with measure_stage("selection"):
         selected = select_evidence(report)
-    tailored = cv.model_copy(update={
-        "skills": [item.text for item in selected if item.section == "skills"],
-        "ai_native": [item.text for item in selected if item.section == "ai_native"],
-        "experience": [
-            role.model_copy(update={"bullets": [
-                item.text for item in selected
-                if item.section == "experience" and item.role_index == index
-            ]})
-            for index, role in enumerate(cv.experience)
-        ],
-    })
+    tailored = cv.model_copy(
+        update={
+            "skills": [item.text for item in selected if item.section == "skills"],
+            "ai_native": [
+                item.text for item in selected if item.section == "ai_native"
+            ],
+            "experience": [
+                role.model_copy(
+                    update={
+                        "bullets": [
+                            item.text
+                            for item in selected
+                            if item.section == "experience" and item.role_index == index
+                        ]
+                    }
+                )
+                for index, role in enumerate(cv.experience)
+            ],
+        }
+    )
     with measure_stage("rewriting"):
         result = rewrite(tailored, llm, report, selected, description, diagnostics)
     return result, report
 
 
 def tailor_with_report(
-    cv: CV, description: str, llm: Runnable,
+    cv: CV,
+    description: str,
+    llm: Runnable,
     diagnostics: TailorDiagnostics | None = None,
     rubric: ScoringRubric | None = None,
-    *, job_cache: Path | None = None, refresh_job_analysis: bool = False,
-    matching_cache: Path | None = None, refresh_matching: bool = False,
+    *,
+    job_cache: Path | None = None,
+    refresh_job_analysis: bool = False,
+    matching_cache: Path | None = None,
+    refresh_matching: bool = False,
     model_identity: str | None = None,
 ) -> tuple[CV, TailoringReport]:
     with measure_run() as performance:
         result, report = _tailor_with_report(
-            cv, description, llm, diagnostics, rubric,
-            job_cache=job_cache, refresh_job_analysis=refresh_job_analysis,
-            matching_cache=matching_cache, refresh_matching=refresh_matching,
+            cv,
+            description,
+            llm,
+            diagnostics,
+            rubric,
+            job_cache=job_cache,
+            refresh_job_analysis=refresh_job_analysis,
+            matching_cache=matching_cache,
+            refresh_matching=refresh_matching,
             model_identity=model_identity,
         )
         report.performance = performance
@@ -2063,7 +2535,8 @@ def tailor_with_report(
 def polish_with_report(cv: CV, llm: Runnable) -> tuple[CV, TailoringReport]:
     with measure_run() as performance:
         report = TailoringReport(
-            label="General-purpose CV rewrite audit", evidence=source_evidence(cv),
+            label="General-purpose CV rewrite audit",
+            evidence=source_evidence(cv),
             performance=performance,
         )
         selected = [item for item in report.evidence if item.section == "experience"]

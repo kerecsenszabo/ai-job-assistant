@@ -5,7 +5,12 @@ import pytest
 
 from assistant import model_benchmark as benchmark
 from assistant.cv_generator import CV, TailorDiagnostics
-from assistant.cv_tailoring import EvidenceItem, RequirementMatch, RewriteAudit, TailoringReport
+from assistant.cv_tailoring import (
+    EvidenceItem,
+    RequirementMatch,
+    RewriteAudit,
+    TailoringReport,
+)
 from assistant.performance import RunPerformance
 
 
@@ -17,47 +22,69 @@ def cv():
 @pytest.fixture
 def report():
     return TailoringReport(
-        match_percent=62.5, must_have_percent=50,
+        match_percent=62.5,
+        must_have_percent=50,
         performance=RunPerformance(
             total_model_calls=4,
             stage_seconds={"matching": 21.0, "rewriting": 12.5},
         ),
         selected_evidence_ids=["skills/0"],
         evidence=[EvidenceItem(id="skills/0", text="Python", section="skills")],
-        matches=[RequirementMatch(
-            requirement_id="r1", status="direct", evidence_ids=["skills/0"],
-            explanation="Source lists Python",
-        )],
+        matches=[
+            RequirementMatch(
+                requirement_id="r1",
+                status="direct",
+                evidence_ids=["skills/0"],
+                explanation="Source lists Python",
+            )
+        ],
         rewrites=[
             RewriteAudit(
-                target_id=f"skills/{index}", source_ids=["skills/0"],
-                original="Python", proposed="Python development",
+                target_id=f"skills/{index}",
+                source_ids=["skills/0"],
+                original="Python",
+                proposed="Python development",
                 exported="Python development" if status == "accepted" else "Python",
-                status=status, reason=f"Automated verdict: {status}",
+                status=status,
+                reason=f"Automated verdict: {status}",
             )
-            for index, status in enumerate(("accepted", "accepted", "rejected", "unclear"))
+            for index, status in enumerate(
+                ("accepted", "accepted", "rejected", "unclear")
+            )
         ],
     )
 
 
 def result(cv, **kwargs):
     return benchmark.BenchmarkResult(
-        run_id="run", model="model", job="job.txt", repetition=1, status="ok",
-        total_seconds=3.5, output_json=cv.model_dump_json(), **kwargs,
+        run_id="run",
+        model="model",
+        job="job.txt",
+        repetition=1,
+        status="ok",
+        total_seconds=3.5,
+        output_json=cv.model_dump_json(),
+        **kwargs,
     )
 
 
 def test_list_models_shows_current_suite(monkeypatch, capsys):
     monkeypatch.setattr(
-        benchmark, "installed_model_info",
+        benchmark,
+        "installed_model_info",
         lambda: {"granite4.2:3b": ("digest", "2.2 GB")},
     )
     benchmark.list_models()
     output = capsys.readouterr().out
     for model, size, tier in benchmark.MODEL_SUITE:
-        line = next(line for line in output.splitlines() if line.startswith(model + " "))
+        line = next(
+            line for line in output.splitlines() if line.startswith(model + " ")
+        )
         assert line.split() == [
-            model, *size.split(), tier, "yes" if model == "granite4.2:3b" else "no",
+            model,
+            *size.split(),
+            tier,
+            "yes" if model == "granite4.2:3b" else "no",
         ]
     assert "Download sizes are not runtime RAM" in output
 
@@ -67,16 +94,15 @@ def test_connect_creates_only_current_result_fields(tmp_path):
     for _ in range(2):
         with benchmark.connect(path) as connection:
             columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(benchmark_results)")
+                row[1]
+                for row in connection.execute("PRAGMA table_info(benchmark_results)")
             }
             assert columns == set(benchmark.BenchmarkResult.__dataclass_fields__)
 
 
 @pytest.mark.parametrize("command", ["run", "report"])
 def test_benchmark_defaults_use_fresh_product_database(command):
-    arguments = (
-        ["--cv", "cv.pdf", "--jobs", "job.txt"] if command == "run" else []
-    )
+    arguments = ["--cv", "cv.pdf", "--jobs", "job.txt"] if command == "run" else []
     args = benchmark.parse_args([command, *arguments])
     assert str(args.database) == "output/benchmarks.sqlite"
     if command == "run":
@@ -106,13 +132,23 @@ def test_save_result_persists_evidence_metrics_and_full_report(tmp_path, cv, rep
     assert row["report_json"] == report.model_dump_json()
     assert row["match_percent"] == 62.5
     assert row["must_have_percent"] == 50
-    assert (row["accepted_rewrites"], row["rejected_rewrites"], row["unclear_rewrites"]) == (2, 1, 1)
-    assert (row["model_calls"], row["matching_seconds"], row["rewriting_seconds"]) == (4, 21, 12.5)
+    assert (
+        row["accepted_rewrites"],
+        row["rejected_rewrites"],
+        row["unclear_rewrites"],
+    ) == (2, 1, 1)
+    assert (row["model_calls"], row["matching_seconds"], row["rewriting_seconds"]) == (
+        4,
+        21,
+        12.5,
+    )
     assert row["matching_cached"] == 0
 
 
 def test_failed_case_without_report_keeps_metrics_null(tmp_path, cv):
-    failed = replace(result(cv), status="error", error="Generation failed", output_json=None)
+    failed = replace(
+        result(cv), status="error", error="Generation failed", output_json=None
+    )
     with benchmark.connect(tmp_path / "benchmark.sqlite") as connection:
         benchmark.save_result(connection, failed)
         row = connection.execute(
@@ -122,29 +158,51 @@ def test_failed_case_without_report_keeps_metrics_null(tmp_path, cv):
     assert row == ("error", "Generation failed", None, None, None, None)
 
 
-def test_benchmark_one_collects_output_audit_and_uses_job_cache(tmp_path, monkeypatch, cv, report):
+def test_benchmark_one_collects_output_audit_and_uses_job_cache(
+    tmp_path, monkeypatch, cv, report
+):
     job = tmp_path / "job.txt"
     job.write_text("Python required")
     cache = tmp_path / "jobs"
     calls = []
 
     def tailor(
-        source, description, *, model, llm, diagnostics, job_cache,
+        source,
+        description,
+        *,
+        model,
+        llm,
+        diagnostics,
+        job_cache,
         refresh_job_analysis,
     ):
-        calls.append((
-            source, description, model, llm.num_predict, job_cache,
-            refresh_job_analysis,
-        ))
+        calls.append(
+            (
+                source,
+                description,
+                model,
+                llm.num_predict,
+                job_cache,
+                refresh_job_analysis,
+            )
+        )
         diagnostics.report = report
         return source
 
     monkeypatch.setattr(benchmark, "tailor_cv", tailor)
-    measured = benchmark.benchmark_one("run", "local-model", job, 2, cv, job_cache=cache)
-    assert calls == [(
-        cv, "Python required", "local-model", benchmark.MAX_OUTPUT_TOKENS,
-        cache, False,
-    )]
+    measured = benchmark.benchmark_one(
+        "run", "local-model", job, 2, cv, job_cache=cache
+    )
+    assert calls == [
+        (
+            cv,
+            "Python required",
+            "local-model",
+            benchmark.MAX_OUTPUT_TOKENS,
+            cache,
+            False,
+        )
+    ]
     assert measured.status == "ok"
     assert measured.output_json == cv.model_dump_json()
     assert measured.total_seconds >= 0
@@ -156,25 +214,45 @@ def test_benchmark_one_collects_output_audit_and_uses_job_cache(tmp_path, monkey
 
 
 def test_empty_report_distinguishes_zero_verdicts_from_missing_report():
-    metrics = benchmark.report_metrics(TailorDiagnostics(report=TailoringReport(
-        match_percent=0, must_have_percent=None,
-    )))
+    metrics = benchmark.report_metrics(
+        TailorDiagnostics(
+            report=TailoringReport(
+                match_percent=0,
+                must_have_percent=None,
+            )
+        )
+    )
     assert metrics["match_percent"] == 0
     assert metrics["must_have_percent"] is None
-    for name in ("accepted_rewrites", "rejected_rewrites", "unclear_rewrites", "model_calls"):
+    for name in (
+        "accepted_rewrites",
+        "rejected_rewrites",
+        "unclear_rewrites",
+        "model_calls",
+    ):
         assert metrics[name] == 0
     assert benchmark.report_metrics(TailorDiagnostics()) == {}
 
 
 @pytest.mark.parametrize("with_report", [False, True])
 def test_failed_benchmark_preserves_error_and_available_audit(
-    tmp_path, monkeypatch, cv, report, with_report,
+    tmp_path,
+    monkeypatch,
+    cv,
+    report,
+    with_report,
 ):
     job = tmp_path / "job.txt"
     job.write_text("Python")
 
     def fail(
-        source, description, *, model, llm, diagnostics, job_cache,
+        source,
+        description,
+        *,
+        model,
+        llm,
+        diagnostics,
+        job_cache,
         refresh_job_analysis,
     ):
         diagnostics.report = report if with_report else None
@@ -189,19 +267,34 @@ def test_failed_benchmark_preserves_error_and_available_audit(
 
 
 def test_benchmark_matrix_persists_successes_and_failures(
-    tmp_path, monkeypatch, cv, report,
+    tmp_path,
+    monkeypatch,
+    cv,
+    report,
 ):
     jobs = [tmp_path / "first.txt", tmp_path / "second.txt"]
     for job in jobs:
         job.write_text("Python required")
     database = tmp_path / "benchmark.sqlite"
-    args = benchmark.parse_args([
-        "run", "--cv", str(tmp_path / "cv.json"),
-        "--jobs", *(str(job) for job in jobs), "--models", "first", "second",
-        "--repeat", "2", "--database", str(database),
-    ])
+    args = benchmark.parse_args(
+        [
+            "run",
+            "--cv",
+            str(tmp_path / "cv.json"),
+            "--jobs",
+            *(str(job) for job in jobs),
+            "--models",
+            "first",
+            "second",
+            "--repeat",
+            "2",
+            "--database",
+            str(database),
+        ]
+    )
     monkeypatch.setattr(
-        benchmark, "installed_model_info",
+        benchmark,
+        "installed_model_info",
         lambda: {"first": ("digest-1", "1 GB"), "second": ("digest-2", "2 GB")},
     )
     monkeypatch.setattr(benchmark, "command_output", lambda *args: "test-version")
@@ -211,17 +304,31 @@ def test_benchmark_matrix_persists_successes_and_failures(
     cases = []
 
     def run_case(
-        run_id, model, job, repetition, source, *,
-        job_cache, refresh_job_analysis,
+        run_id,
+        model,
+        job,
+        repetition,
+        source,
+        *,
+        job_cache,
+        refresh_job_analysis,
     ):
-        cases.append((model, job.name, repetition, source, job_cache, refresh_job_analysis))
+        cases.append(
+            (model, job.name, repetition, source, job_cache, refresh_job_analysis)
+        )
         measured = replace(
             result(cv, **benchmark.report_metrics(TailorDiagnostics(report=report))),
-            run_id=run_id, model=model, job=job.name, repetition=repetition,
+            run_id=run_id,
+            model=model,
+            job=job.name,
+            repetition=repetition,
         )
         if model == "first" and job == jobs[0] and repetition == 1:
             return replace(
-                measured, status="error", output_json=None, error="Model unavailable",
+                measured,
+                status="error",
+                output_json=None,
+                error="Model unavailable",
             )
         return measured
 
@@ -229,7 +336,9 @@ def test_benchmark_matrix_persists_successes_and_failures(
     benchmark.run_benchmark(args)
     assert [(model, job, repetition) for model, job, repetition, _, _, _ in cases] == [
         (model, job.name, repetition)
-        for model in ["first", "second"] for job in jobs for repetition in [1, 2]
+        for model in ["first", "second"]
+        for job in jobs
+        for repetition in [1, 2]
     ]
     assert all(
         source == cv and cache == args.job_cache and not refresh
@@ -246,19 +355,33 @@ def test_benchmark_matrix_persists_successes_and_failures(
 
 
 def test_refreshes_each_job_until_success_then_reuses_analysis(
-    tmp_path, monkeypatch, cv,
+    tmp_path,
+    monkeypatch,
+    cv,
 ):
     jobs = [tmp_path / "first.txt", tmp_path / "second.txt"]
     for job in jobs:
         job.write_text("Python required")
-    args = benchmark.parse_args([
-        "run", "--cv", str(tmp_path / "cv.json"),
-        "--jobs", *(str(job) for job in jobs), "--models", "first", "second",
-        "--repeat", "2", "--database", str(tmp_path / "benchmark.sqlite"),
-        "--refresh-job-analysis",
-    ])
+    args = benchmark.parse_args(
+        [
+            "run",
+            "--cv",
+            str(tmp_path / "cv.json"),
+            "--jobs",
+            *(str(job) for job in jobs),
+            "--models",
+            "first",
+            "second",
+            "--repeat",
+            "2",
+            "--database",
+            str(tmp_path / "benchmark.sqlite"),
+            "--refresh-job-analysis",
+        ]
+    )
     monkeypatch.setattr(
-        benchmark, "installed_model_info",
+        benchmark,
+        "installed_model_info",
         lambda: {"first": ("digest-1", "1 GB"), "second": ("digest-2", "2 GB")},
     )
     monkeypatch.setattr(benchmark, "command_output", lambda *args: "test-version")
@@ -267,18 +390,36 @@ def test_refreshes_each_job_until_success_then_reuses_analysis(
     calls = []
 
     def run_case(
-        run_id, model, job, repetition, source, *,
-        job_cache, refresh_job_analysis,
+        run_id,
+        model,
+        job,
+        repetition,
+        source,
+        *,
+        job_cache,
+        refresh_job_analysis,
     ):
         calls.append((model, job.name, repetition, refresh_job_analysis))
         if job == jobs[0] and repetition == 1 and model == "first":
             return benchmark.BenchmarkResult(
-                run_id, model, job.name, repetition, "error", 0.1,
+                run_id,
+                model,
+                job.name,
+                repetition,
+                "error",
+                0.1,
                 error="Job parse failed",
             )
         return benchmark.BenchmarkResult(
-            run_id, model, job.name, repetition, "ok", 0.1,
-            model_calls=1, matching_seconds=0.05, rewriting_seconds=0.05,
+            run_id,
+            model,
+            job.name,
+            repetition,
+            "ok",
+            0.1,
+            model_calls=1,
+            matching_seconds=0.05,
+            rewriting_seconds=0.05,
         )
 
     monkeypatch.setattr(benchmark, "benchmark_one", run_case)
@@ -305,8 +446,21 @@ def test_report_shows_current_evidence_metrics(tmp_path, cv, report, capsys):
         benchmark.save_result(connection, measured)
         benchmark.print_report(connection)
     output = capsys.readouterr().out
-    line = next(line for line in output.splitlines() if line.startswith("model ") and "avg s" not in line)
-    assert line.split()[-8:] == ["62.5%", "50.0%", "2/1/1", "1/1", "4.0", "21.0", "12.5", "0"]
+    line = next(
+        line
+        for line in output.splitlines()
+        if line.startswith("model ") and "avg s" not in line
+    )
+    assert line.split()[-8:] == [
+        "62.5%",
+        "50.0%",
+        "2/1/1",
+        "1/1",
+        "4.0",
+        "21.0",
+        "12.5",
+        "0",
+    ]
     assert "source-evidence coverage" in output
     assert "approved rewrites are not proof" in output
     assert "report_json" in output
@@ -319,5 +473,9 @@ def test_report_does_not_treat_failed_cases_as_zero_coverage(tmp_path, cv, capsy
         benchmark.save_result(connection, failed)
         benchmark.print_report(connection, "run")
     output = capsys.readouterr().out
-    line = next(line for line in output.splitlines() if line.startswith("model ") and "avg s" not in line)
+    line = next(
+        line
+        for line in output.splitlines()
+        if line.startswith("model ") and "avg s" not in line
+    )
     assert "0/1" in line and "0.0%" not in line

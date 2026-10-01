@@ -24,7 +24,9 @@ def test_failed_model_requests_are_counted_and_scopes_do_not_leak():
 
     with measure_run() as failed:
         with pytest.raises(ConnectionError):
-            request(RunnableLambda(unavailable), ParsedJob, "Parse.", {}, stage="matching")
+            request(
+                RunnableLambda(unavailable), ParsedJob, "Parse.", {}, stage="matching"
+            )
     assert failed.total_model_calls == 1
     assert failed.stage_model_seconds["matching"] > 0
     with measure_run() as next_run:

@@ -33,8 +33,12 @@ def atomic_write_json(path: Path, value: dict[str, object]) -> None:
     temporary_path = None
     try:
         with NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent,
-            prefix=f".{path.stem}.", suffix=".tmp", delete=False,
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.stem}.",
+            suffix=".tmp",
+            delete=False,
         ) as temporary:
             temporary_path = Path(temporary.name)
             json.dump(value, temporary, ensure_ascii=False, indent=2)
@@ -64,7 +68,8 @@ def get_parsed_job(
     schema_hash = hashlib.sha256(
         json.dumps(
             {"version": CACHE_VERSION, "schema": ParsedJob.model_json_schema()},
-            sort_keys=True, separators=(",", ":")
+            sort_keys=True,
+            separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
     cache_path = cache_dir / f"{fingerprint}.json"

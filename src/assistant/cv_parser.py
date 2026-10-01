@@ -1,6 +1,7 @@
 """Parse and chunk a CV PDF into text segments."""
 
 from pathlib import Path
+
 import pdfplumber
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
@@ -43,7 +44,9 @@ def chunk_text(
 ) -> list[str]:
     """Split text into overlapping chunks."""
     if chunk_size <= 0 or not 0 <= overlap < chunk_size:
-        raise ValueError("Chunk size must be positive and overlap smaller than chunk size.")
+        raise ValueError(
+            "Chunk size must be positive and overlap smaller than chunk size."
+        )
     chunks = []
     start = 0
     while start < len(text):

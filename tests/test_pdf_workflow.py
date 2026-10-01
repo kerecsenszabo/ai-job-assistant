@@ -5,7 +5,14 @@ from unittest.mock import Mock
 import pytest
 from langchain_core.runnables import RunnableLambda
 
-from assistant import cli, cv_generator, cv_parser, cv_tailoring, ingest_data, model_benchmark
+from assistant import (
+    cli,
+    cv_generator,
+    cv_parser,
+    cv_tailoring,
+    ingest_data,
+    model_benchmark,
+)
 from assistant.cv_generator import CV, load_cv
 from assistant.cv_tailoring import TailoringReport
 
@@ -24,8 +31,11 @@ def pdf(tmp_path):
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
         b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n"
-        + stream + b"\nendstream",
+        b"<< /Length "
+        + str(len(stream)).encode()
+        + b" >>\nstream\n"
+        + stream
+        + b"\nendstream",
     ]
     content = b"%PDF-1.4\n"
     offsets = []
@@ -46,10 +56,17 @@ def pdf(tmp_path):
 
 @pytest.fixture
 def source():
-    return CV(name="Example Candidate", experience=[{
-        "company": "Example Co", "role": "Engineer", "dates": "2024",
-        "bullets": ["Built Python pipelines."],
-    }])
+    return CV(
+        name="Example Candidate",
+        experience=[
+            {
+                "company": "Example Co",
+                "role": "Engineer",
+                "dates": "2024",
+                "bullets": ["Built Python pipelines."],
+            }
+        ],
+    )
 
 
 def responder(cv):
@@ -61,11 +78,14 @@ def test_pdf_extraction_and_import_preserve_verbatim_facts(pdf, source):
     assert load_cv(pdf, llm=responder(source)) == source
 
 
-@pytest.mark.parametrize("changes", [
-    {"skills": ["Kubernetes"]},
-    {"summary": "Managed a team of 20."},
-    {"languages": [{"name": "English", "proficiency": "Native"}]},
-])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"skills": ["Kubernetes"]},
+        {"summary": "Managed a team of 20."},
+        {"languages": [{"name": "English", "proficiency": "Native"}]},
+    ],
+)
 def test_pdf_import_rejects_fabricated_fields(pdf, source, changes):
     with pytest.raises(ValueError, match="unsupported text"):
         load_cv(pdf, llm=responder(CV.model_validate(source.model_dump() | changes)))
@@ -79,7 +99,8 @@ def test_pdf_import_cannot_silently_default_missing_sections(pdf):
 
 def test_pdf_import_rejects_empty_visible_section(pdf, source, monkeypatch):
     monkeypatch.setattr(
-        cv_parser, "extract_text",
+        cv_parser,
+        "extract_text",
         lambda path: "Example Candidate\nExperience\nEngineer at Example Co\n"
         "2024\nBuilt Python pipelines.",
     )
@@ -144,14 +165,26 @@ def test_cli_pdf_to_pdf_with_pdf_job(pdf, source, monkeypatch, tmp_path, capsys)
 
     monkeypatch.setattr(cv_generator, "local_llm", lambda model: imported)
     monkeypatch.setattr(cv_tailoring, "tailor_with_report", tailor)
-    monkeypatch.setattr(cv_generator, "write_pdf", lambda latex, path: path.write_text(latex))
-    cli.main([
-        "generate", "--cv", str(pdf), "--job", str(pdf),
-        "--output", str(output), "--no-matching-cache",
-    ])
+    monkeypatch.setattr(
+        cv_generator, "write_pdf", lambda latex, path: path.write_text(latex)
+    )
+    cli.main(
+        [
+            "generate",
+            "--cv",
+            str(pdf),
+            "--job",
+            str(pdf),
+            "--output",
+            str(output),
+            "--no-matching-cache",
+        ]
+    )
     assert output.exists()
     assert calls == [(source, cv_parser.extract_text(pdf), imported)]
-    assert CV.model_validate_json(output.with_suffix(".source.json").read_text()) == source
+    assert (
+        CV.model_validate_json(output.with_suffix(".source.json").read_text()) == source
+    )
     exported = CV.model_validate_json(output.with_suffix(".json").read_text())
     assert exported.summary == "Engineer"
     report = json.loads(output.with_suffix(".report.json").read_text())
@@ -159,45 +192,69 @@ def test_cli_pdf_to_pdf_with_pdf_job(pdf, source, monkeypatch, tmp_path, capsys)
     assert "Review the imported source JSON" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("source_name", ["cv.pdf", "cv.json", "cv.tex", "cv.report.json"])
+@pytest.mark.parametrize(
+    "source_name", ["cv.pdf", "cv.json", "cv.tex", "cv.report.json"]
+)
 def test_cli_cannot_overwrite_input(tmp_path, source_name):
     with pytest.raises(SystemExit) as exc:
-        cli.main([
-            "generate", "--cv", str(tmp_path / source_name),
-            "--output", str(tmp_path / "cv.pdf"),
-        ])
+        cli.main(
+            [
+                "generate",
+                "--cv",
+                str(tmp_path / source_name),
+                "--output",
+                str(tmp_path / "cv.pdf"),
+            ]
+        )
     assert exc.value.code == 2
 
 
 @pytest.mark.parametrize("input_flag", ["--job", "--rubric"])
 def test_cli_sidecars_cannot_overwrite_other_inputs(tmp_path, input_flag, capsys):
     with pytest.raises(SystemExit) as exc:
-        cli.main([
-            "generate", "--cv", str(tmp_path / "source.json"),
-            "--job", str(tmp_path / "target.txt"),
-            input_flag, str(tmp_path / "cv.json"),
-            "--output", str(tmp_path / "cv.pdf"),
-        ])
+        cli.main(
+            [
+                "generate",
+                "--cv",
+                str(tmp_path / "source.json"),
+                "--job",
+                str(tmp_path / "target.txt"),
+                input_flag,
+                str(tmp_path / "cv.json"),
+                "--output",
+                str(tmp_path / "cv.pdf"),
+            ]
+        )
     assert exc.value.code == 2
     assert "must not overwrite" in capsys.readouterr().err
 
 
 def test_imported_source_remains_available_if_pdf_compilation_fails(
-    pdf, source, tmp_path, monkeypatch, capsys,
+    pdf,
+    source,
+    tmp_path,
+    monkeypatch,
+    capsys,
 ):
     output = tmp_path / "generated.pdf"
     monkeypatch.setattr(cv_generator, "local_llm", lambda model: responder(source))
     monkeypatch.setattr(
-        cv_tailoring, "polish_with_report", lambda cv, llm: (cv, TailoringReport()),
+        cv_tailoring,
+        "polish_with_report",
+        lambda cv, llm: (cv, TailoringReport()),
     )
     monkeypatch.setattr(
-        cv_generator, "write_pdf", Mock(side_effect=FileNotFoundError("Compiler unavailable")),
+        cv_generator,
+        "write_pdf",
+        Mock(side_effect=FileNotFoundError("Compiler unavailable")),
     )
     with pytest.raises(SystemExit) as exc:
         cli.main(["generate", "--cv", str(pdf), "--output", str(output)])
     assert exc.value.code == 1
     assert "Compiler unavailable" in capsys.readouterr().err
-    assert CV.model_validate_json(output.with_suffix(".source.json").read_text()) == source
+    assert (
+        CV.model_validate_json(output.with_suffix(".source.json").read_text()) == source
+    )
     assert not output.exists()
     assert not output.with_suffix(".report.json").exists()
 
@@ -205,7 +262,8 @@ def test_imported_source_remains_available_if_pdf_compilation_fails(
 def test_benchmark_accepts_pdf_job(pdf, source, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        model_benchmark, "tailor_cv",
+        model_benchmark,
+        "tailor_cv",
         lambda cv, job, **kwargs: calls.append(job) or cv,
     )
     result = model_benchmark.benchmark_one("run", "model", pdf, 1, source)
@@ -217,12 +275,14 @@ def test_benchmark_pdf_import_is_shared_and_saved(pdf, source, tmp_path, monkeyp
     imports = []
     cases = []
     monkeypatch.setattr(
-        model_benchmark, "installed_model_info",
+        model_benchmark,
+        "installed_model_info",
         lambda: {"first": ("digest-1", "1 GB"), "second": ("digest-2", "2 GB")},
     )
     monkeypatch.setattr(model_benchmark, "command_output", lambda *args: "test")
     monkeypatch.setattr(
-        model_benchmark, "load_cv",
+        model_benchmark,
+        "load_cv",
         lambda path, model: imports.append((path, model)) or source,
     )
     monkeypatch.setattr(model_benchmark, "unload_model", lambda model: None)
@@ -231,16 +291,27 @@ def test_benchmark_pdf_import_is_shared_and_saved(pdf, source, tmp_path, monkeyp
     def benchmark(run_id, model, job, repetition, cv, **kwargs):
         cases.append((model, cv))
         return model_benchmark.BenchmarkResult(
-            run_id=run_id, model=model, job=job.name, repetition=repetition,
-            status="error", total_seconds=0,
+            run_id=run_id,
+            model=model,
+            job=job.name,
+            repetition=repetition,
+            status="error",
+            total_seconds=0,
             error="synthetic case",
         )
 
     monkeypatch.setattr(model_benchmark, "benchmark_one", benchmark)
-    model_benchmark.run_benchmark(Namespace(
-        cv=pdf, jobs=[pdf], models=["first", "second"], repeat=1, pull=False,
-        database=tmp_path / "benchmark.sqlite", job_cache=tmp_path / "jobs",
-    ))
+    model_benchmark.run_benchmark(
+        Namespace(
+            cv=pdf,
+            jobs=[pdf],
+            models=["first", "second"],
+            repeat=1,
+            pull=False,
+            database=tmp_path / "benchmark.sqlite",
+            job_cache=tmp_path / "jobs",
+        )
+    )
     assert imports == [(pdf, "first")]
     assert cases == [("first", source), ("second", source)]
     sources = list(tmp_path.glob("*.source.json"))
@@ -256,12 +327,14 @@ def test_ingestion_indexes_cv_and_jobs_with_source_labels(pdf, tmp_path, monkeyp
     calls = []
     monkeypatch.setattr(vector_store, "clear_db", lambda: calls.append("clear"))
     monkeypatch.setattr(
-        vector_store, "ingest",
+        vector_store,
+        "ingest",
         lambda chunks, source: calls.append((chunks, source)),
     )
     ingest_data.index_documents(pdf, [job])
     assert calls == [
-        "clear", (cv_parser.chunk_text(cv_parser.extract_text(pdf)), "cv:cv.pdf"),
+        "clear",
+        (cv_parser.chunk_text(cv_parser.extract_text(pdf)), "cv:cv.pdf"),
         (["Python required"], "jd:1:job.txt"),
     ]
 
@@ -269,12 +342,16 @@ def test_ingestion_indexes_cv_and_jobs_with_source_labels(pdf, tmp_path, monkeyp
 def test_invalid_ingestion_input_does_not_clear_index(pdf, tmp_path, monkeypatch):
     from assistant import vector_store
 
-    monkeypatch.setattr(vector_store, "clear_db", lambda: pytest.fail("Cleared existing index"))
+    monkeypatch.setattr(
+        vector_store, "clear_db", lambda: pytest.fail("Cleared existing index")
+    )
     with pytest.raises(FileNotFoundError):
         ingest_data.index_documents(pdf, [tmp_path / "missing.txt"])
 
 
-def test_ingestion_default_jobs_include_only_supported_documents(pdf, tmp_path, monkeypatch):
+def test_ingestion_default_jobs_include_only_supported_documents(
+    pdf, tmp_path, monkeypatch
+):
     from assistant import vector_store
 
     jobs = tmp_path / "job_descriptions"
@@ -289,13 +366,17 @@ def test_ingestion_default_jobs_include_only_supported_documents(pdf, tmp_path, 
     monkeypatch.setattr(vector_store, "ingest", ingest)
     ingest_data.index_documents(pdf)
     assert [call.kwargs["source"] for call in ingest.call_args_list] == [
-        "cv:cv.pdf", "jd:1:first.txt", "jd:2:second.pdf",
+        "cv:cv.pdf",
+        "jd:1:first.txt",
+        "jd:2:second.pdf",
     ]
     ingest.reset_mock()
     ingest_data.index_documents(pdf, [])
     ingest.assert_called_once_with(
-        cv_parser.chunk_text(cv_parser.extract_text(pdf)), source="cv:cv.pdf",
+        cv_parser.chunk_text(cv_parser.extract_text(pdf)),
+        source="cv:cv.pdf",
     )
+
 
 def test_clear_index_also_works_on_first_run(monkeypatch):
     from assistant import vector_store
@@ -319,7 +400,8 @@ def test_retrieval_labels_cv_and_job_passages(monkeypatch):
     monkeypatch.setattr(vector_store, "get_collection", lambda: collection)
     monkeypatch.setattr(vector_store, "embed", lambda texts: [[0.1]])
     assert vector_store.search("Python") == [
-        "[cv:cv.pdf]\nCV fact", "[jd:1:job.txt]\nJob requirement",
+        "[cv:cv.pdf]\nCV fact",
+        "[jd:1:job.txt]\nJob requirement",
     ]
 
 
@@ -337,9 +419,12 @@ def test_chat_uses_shared_model_and_source_labels(monkeypatch):
     from assistant import rag_chain
 
     prompts = []
-    monkeypatch.setattr(rag_chain, "search", lambda question, top_k: ["[jd:job.txt]\nPython required"])
     monkeypatch.setattr(
-        rag_chain, "local_llm",
+        rag_chain, "search", lambda question, top_k: ["[jd:job.txt]\nPython required"]
+    )
+    monkeypatch.setattr(
+        rag_chain,
+        "local_llm",
         lambda model: RunnableLambda(lambda prompt: prompts.append(prompt) or model),
     )
     assert rag_chain.MODEL == cv_generator.MODEL

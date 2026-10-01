@@ -1,5 +1,6 @@
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
 from assistant.cv_generator import MODEL, local_llm
 from assistant.vector_store import search
 

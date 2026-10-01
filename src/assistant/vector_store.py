@@ -1,5 +1,7 @@
-import chromadb
 from pathlib import Path
+
+import chromadb
+
 from assistant.embeddings import embed
 
 DB_PATH = Path(__file__).parent.parent.parent / "chroma_db"
@@ -29,7 +31,9 @@ def search(query: str, top_k: int = 5, source_filter: str | None = None) -> list
     """Semantic search — returns top_k relevant chunks."""
     collection = get_collection()
     if collection.count() == 0:
-        raise ValueError("Chat index is empty. Run job-assistant chat --cv data/cv.pdf first.")
+        raise ValueError(
+            "Chat index is empty. Run job-assistant chat --cv data/cv.pdf first."
+        )
     query_vector = embed([query])[0]
     where = {"source": source_filter} if source_filter else None
     results = collection.query(
@@ -39,10 +43,7 @@ def search(query: str, top_k: int = 5, source_filter: str | None = None) -> list
     )
     documents = results["documents"][0]
     metadata = results["metadatas"][0]
-    return [
-        f"[{item['source']}]\n{text}"
-        for text, item in zip(documents, metadata)
-    ]
+    return [f"[{item['source']}]\n{text}" for text, item in zip(documents, metadata)]
 
 
 def clear_db() -> None:

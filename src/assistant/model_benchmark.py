@@ -63,8 +63,7 @@ def connect(path: Path) -> sqlite3.Connection:
             f"Unsupported benchmark database schema: {path}. "
             "Keep this archive and use --database with a new file."
         )
-    connection.execute(
-        """
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS benchmark_runs (
             run_id TEXT PRIMARY KEY,
             started_at TEXT NOT NULL,
@@ -72,10 +71,8 @@ def connect(path: Path) -> sqlite3.Connection:
             cv_path TEXT NOT NULL,
             context_tokens INTEGER NOT NULL
         )
-        """
-    )
-    connection.execute(
-        """
+        """)
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS benchmark_results (
             run_id TEXT NOT NULL,
             model TEXT NOT NULL,
@@ -98,10 +95,8 @@ def connect(path: Path) -> sqlite3.Connection:
             PRIMARY KEY (run_id, model, job, repetition),
             FOREIGN KEY (run_id) REFERENCES benchmark_runs(run_id)
         )
-        """
-    )
-    connection.execute(
-        """
+        """)
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS benchmark_models (
             run_id TEXT NOT NULL,
             model TEXT NOT NULL,
@@ -110,17 +105,14 @@ def connect(path: Path) -> sqlite3.Connection:
             PRIMARY KEY (run_id, model),
             FOREIGN KEY (run_id) REFERENCES benchmark_runs(run_id)
         )
-        """
-    )
+        """)
     connection.commit()
     return connection
 
 
 def command_output(*command: str) -> str:
     """Run a small local command and return its output."""
-    completed = subprocess.run(
-        command, check=True, capture_output=True, text=True
-    )
+    completed = subprocess.run(command, check=True, capture_output=True, text=True)
     return completed.stdout.strip() or completed.stderr.strip()
 
 
@@ -276,11 +268,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
         pull_model(model)
     available = installed_model_info()
 
-    run_id = (
-        datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        + "-"
-        + uuid.uuid4().hex[:8]
-    )
+    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     connection = connect(args.database)
     connection.execute(
         "INSERT INTO benchmark_runs VALUES (?, ?, ?, ?, ?)",
@@ -294,17 +282,16 @@ def run_benchmark(args: argparse.Namespace) -> None:
     )
     connection.executemany(
         "INSERT INTO benchmark_models VALUES (?, ?, ?, ?)",
-        [
-            (run_id, model, available[model][0], available[model][1])
-            for model in models
-        ],
+        [(run_id, model, available[model][0], available[model][1]) for model in models],
     )
     connection.commit()
     cv = load_cv(args.cv, model=models[0])
     if args.cv.suffix.lower() == ".pdf":
         source_path = args.database.parent / f"{run_id}.source.json"
         source_path.write_text(cv.model_dump_json(indent=2), encoding="utf-8")
-        print(f"PDF imported once for all models; review extracted facts in {source_path}.")
+        print(
+            f"PDF imported once for all models; review extracted facts in {source_path}."
+        )
         unload_model(models[0])
     total = len(models) * len(args.jobs) * args.repeat
     position = 0
@@ -315,7 +302,12 @@ def run_benchmark(args: argparse.Namespace) -> None:
                 position += 1
                 print(f"[{position}/{total}] {model} / {job.name} / run {repetition}")
                 result = benchmark_one(
-                    run_id, model, job, repetition, cv, job_cache=args.job_cache,
+                    run_id,
+                    model,
+                    job,
+                    repetition,
+                    cv,
+                    job_cache=args.job_cache,
                     refresh_job_analysis=job in pending_refresh,
                 )
                 save_result(connection, result)
@@ -367,7 +359,10 @@ def print_report(connection: sqlite3.Connection, run_id: str | None = None) -> N
     ).fetchall()
     rows = sorted(
         rows,
-        key=lambda row: (-row[2] / row[1], row[3] if row[3] is not None else float("inf")),
+        key=lambda row: (
+            -row[2] / row[1],
+            row[3] if row[3] is not None else float("inf"),
+        ),
     )
     print(f"\nBenchmark run: {run_id}")
     print(
@@ -376,9 +371,20 @@ def print_report(connection: sqlite3.Connection, run_id: str | None = None) -> N
     )
     print("-" * 140)
     for (
-        model, cases, successes, seconds,
-        match, must_have, accepted, rejected, unclear, reports,
-        calls, matching, rewriting, cached,
+        model,
+        cases,
+        successes,
+        seconds,
+        match,
+        must_have,
+        accepted,
+        rejected,
+        unclear,
+        reports,
+        calls,
+        matching,
+        rewriting,
+        cached,
     ) in rows:
         duration = f"{seconds:.1f}" if seconds is not None else "-"
         match_text = f"{match:.1f}%" if match is not None else "-"
@@ -413,7 +419,9 @@ def list_models() -> None:
     print(f"{'model':<44} {'download':<9} {'tier':<10} installed")
     print("-" * 74)
     for model, size, tier in MODEL_SUITE:
-        print(f"{model:<44} {size:<9} {tier:<10} {'yes' if model in available else 'no'}")
+        print(
+            f"{model:<44} {size:<9} {tier:<10} {'yes' if model in available else 'no'}"
+        )
     print(
         "\nDownload sizes are not runtime RAM. This shortlist targets 8 GB total RAM;\n"
         "16K context, runtime buffers and the OS need additional memory.\n"
@@ -423,7 +431,8 @@ def list_models() -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="job-assistant benchmark", description=__doc__,
+        prog="job-assistant benchmark",
+        description=__doc__,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -431,15 +440,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     models_parser.set_defaults(handler=lambda args: list_models())
 
     run_parser = subparsers.add_parser("run", help="run and persist benchmarks")
-    run_parser.add_argument("--cv", type=Path, required=True, help="Source CV PDF or JSON")
-    run_parser.add_argument("--jobs", type=Path, nargs="+", required=True, help="Job TXT/PDF files")
+    run_parser.add_argument(
+        "--cv", type=Path, required=True, help="Source CV PDF or JSON"
+    )
+    run_parser.add_argument(
+        "--jobs", type=Path, nargs="+", required=True, help="Job TXT/PDF files"
+    )
     run_parser.add_argument("--models", nargs="+")
     run_parser.add_argument("--repeat", type=int, default=1)
     run_parser.add_argument("--pull", action="store_true")
     run_parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
     run_parser.add_argument("--job-cache", type=Path, default=DEFAULT_JOB_CACHE)
     run_parser.add_argument(
-        "--refresh-job-analysis", action="store_true",
+        "--refresh-job-analysis",
+        action="store_true",
         help="Reparse stale job analyses once per job before reusing them across models",
     )
     run_parser.set_defaults(handler=run_benchmark)
