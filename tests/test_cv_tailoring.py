@@ -765,7 +765,8 @@ def test_parser_recovers_unquoted_options_from_source_after_retries(option):
     assert parsed.requirements[0].criteria[0].kind == "general"
     assert parsed.requirements[0].criteria[0].text == "Build Python services."
     assert parsed.requirements[0].criteria[0].options == []
-    assert option in parsed.warnings[0]
+    assert len(parsed.warnings) == 1
+    assert "discarded 1 unquoted option(s)" in parsed.warnings[0]
 
 
 @pytest.mark.parametrize("option", ["engineers", "Engineer"])
@@ -799,7 +800,7 @@ def test_parser_uses_responsibility_instead_of_role_as_technology(option):
     assert criteria[0].text == source.split(", ", 1)[1]
     assert criteria[0].quote == source
     if option == "engineers":
-        assert option in parsed.warnings[0]
+        assert "discarded 1 unquoted option(s)" in parsed.warnings[0]
     else:
         assert not parsed.warnings
 
@@ -830,7 +831,7 @@ def test_parser_preserves_named_tool_while_discarding_role_option():
     assert [(item.kind, item.options) for item in criteria] == [
         ("technology", ["Python"]),
     ]
-    assert "engineers" in parsed.warnings[0]
+    assert "discarded 1 unquoted option(s)" in parsed.warnings[0]
 
 
 def test_parser_recovers_unquoted_role_without_job_title_from_source():
@@ -878,7 +879,77 @@ def test_parser_preserves_valid_criteria_when_another_option_is_unquoted():
         ("technology", ["SQL"]),
     ]
     assert parsed.requirements[0].criteria[1].text == source
-    assert "Rust" in parsed.warnings[0]
+    assert "discarded 1 unquoted option(s)" in parsed.warnings[0]
+
+
+def test_parser_recovers_once_when_model_repeats_other_source_options():
+    delivery = (
+        "As a Data Engineer, you are expected to deliver complex projects "
+        "individually or by leading small delivery teams."
+    )
+    mentoring = (
+        "Additionally, we expect you to mentor more junior engineers, "
+        "evaluate their work, and contribute to hiring data engineers."
+    )
+    unrelated = ["mentoring more junior engineers", "hiring data engineers"]
+    unrelated += [
+        " ".join(mentoring.split()[:length])
+        for length in range(5, len(mentoring.split()) + 1)
+    ]
+    response = {
+        "requirements": {
+            "source/0": {
+                "importance": "responsibility",
+                "criteria": [
+                    {
+                        "text": "engineers",
+                        "kind": "technology",
+                        "options": ["engineers", *unrelated],
+                    },
+                    {
+                        "text": "junior engineers",
+                        "kind": "technology",
+                        "options": unrelated + ["engineers"],
+                    },
+                ],
+            },
+            "source/1": {
+                "importance": "responsibility",
+                "criteria": [{"text": mentoring, "kind": "general", "options": []}],
+            },
+        }
+    }
+    llm, calls = fake_llm([response] * 3)
+    parsed = parse_job(llm, delivery + "\n" + mentoring)
+    assert len(calls) == 3
+    assert [item.quote for item in parsed.requirements] == [delivery, mentoring]
+    assert len(parsed.requirements[0].criteria) == 1
+    assert parsed.requirements[0].criteria[0].kind == "general"
+    assert parsed.requirements[0].criteria[0].text == delivery.split(", ", 1)[1]
+    assert parsed.requirements[1].criteria[0].text == mentoring
+    assert len(parsed.warnings) == 1
+    assert len(parsed.warnings[0]) < 180
+    assert "using one source-quoted general criterion" in parsed.warnings[0]
+    assert "junior engineers" not in parsed.warnings[0]
+
+
+def test_parser_does_not_repeat_existing_general_quote_during_recovery():
+    response = {
+        "requirements": {
+            "source/0": {
+                "importance": "required",
+                "criteria": [
+                    {"text": "Rust", "kind": "technology", "options": ["Rust"]},
+                    {"text": "Build Python services.", "kind": "general", "options": []},
+                ],
+            }
+        }
+    }
+    llm, _ = fake_llm([response] * 3)
+    parsed = parse_job(llm, "Build Python services.")
+    assert len(parsed.requirements[0].criteria) == 1
+    assert parsed.requirements[0].criteria[0].text == "Build Python services."
+    assert len(parsed.warnings) == 1
 
 
 @pytest.mark.parametrize(("kind", "option"), [("technology", ""), ("language", "French")])
@@ -1020,6 +1091,80 @@ def test_copied_job_sentences_and_bullets_become_atomic_source_quotes():
     ]
 
 
+def test_linkedin_semicolons_keep_distinct_requirements_and_company_text():
+    description = (
+        "What does it take to fit the bill?\n"
+        "We consider ourselves a learning organization.\n"
+        "Thus technical mentoring and/or people management hands-on experience "
+        "is a big plus;\n"
+        "You thrive when having to solve problems & take ownership.\n"
+        "You are fluent in English and willing to travel up to 15% of your time."
+    )
+    sources = assessable_job_lines(description)
+    assert sources == [
+        "We consider ourselves a learning organization.",
+        "Thus technical mentoring and/or people management hands-on experience "
+        "is a big plus;",
+        "You thrive when having to solve problems & take ownership.",
+        "You are fluent in English and willing to travel up to 15% of your time.",
+    ]
+
+    def respond(prompt, **kwargs):
+        keyed = json.loads(prompt.to_messages()[-1].content)["source_lines"]
+        return json.dumps(
+            {
+                "requirements": {
+                    source_id: (
+                        None
+                        if quote.startswith("We consider")
+                        else {
+                            "importance": "required",
+                            "criteria": (
+                                [
+                                    {
+                                        "text": "English",
+                                        "kind": "language",
+                                        "options": ["English"],
+                                    },
+                                    {
+                                        "text": "willing to travel up to 15% of your time",
+                                        "kind": "general",
+                                        "options": [],
+                                    },
+                                ]
+                                if "fluent in English" in quote
+                                else [
+                                    {"text": quote, "kind": "general", "options": []}
+                                ]
+                            ),
+                        }
+                    )
+                    for source_id, quote in keyed.items()
+                }
+            }
+        )
+
+    parsed = parse_job(RunnableLambda(respond), description)
+    assert [item.quote for item in parsed.requirements] == sources[1:]
+    assert [item.importance for item in parsed.requirements] == [
+        "preferred",
+        "required",
+        "required",
+    ]
+    assert [
+        (criterion.kind, criterion.options)
+        for criterion in parsed.requirements[-1].criteria
+    ] == [("language", ["English"]), ("general", [])]
+    assert not parsed.warnings
+    assert assessable_job_lines(
+        "Use Spark; Databricks for production. "
+        "You must also mentor others."
+    ) == [
+        "Use Spark; Databricks for production.",
+        "You must also mentor others.",
+    ]
+
+
 def test_company_intro_preceding_explicit_description_is_not_a_requirement():
     description = (
         "About the job\n"
@@ -1086,6 +1231,14 @@ def test_extraction_schema_bounds_arrays_by_source_size():
     criteria = requirement["properties"]["criteria"]["items"]["oneOf"]
     assert criteria[0]["properties"]["options"]["maxItems"] == 0
     assert criteria[1]["properties"]["options"]["maxItems"] == 5
+    long_quote = "Build " + " and ".join(f"Tool{index}" for index in range(20))
+    long_criteria = job_extraction_schema({"source/0": long_quote})["properties"][
+        "requirements"
+    ]["properties"]["source/0"]["anyOf"][0]["properties"]["criteria"]["items"][
+        "oneOf"
+    ]
+    assert long_criteria[1]["properties"]["options"]["maxItems"] == 12
+    assert long_criteria[1]["properties"]["options"]["items"]["maxLength"] == 80
 
 
 @pytest.mark.parametrize(

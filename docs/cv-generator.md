@@ -28,12 +28,14 @@ an AI-Native Practice section. Unknown fields are rejected.
 The job describes what to emphasize, never new candidate facts. The pipeline:
 
 1. Extracts source-linked, atomic job criteria, separating required, preferred,
-   responsibilities and eligibility constraints. Long descriptions use bounded
-   chunks; invalid extraction retries with feedback. If options are still
-   absent from their source quotes, they are discarded, with an optionless
-   clause assessed conservatively from its source quote. The recovery is
-   recorded in the job-analysis cache and the report warnings. Other invalid
-   extractions still fail explicitly.
+   responsibilities and eligibility constraints. Copied job descriptions retain
+   semicolon-separated requirement boundaries; long descriptions use bounded
+   chunks. Invalid extraction retries with feedback. Options still absent from
+   their source quotes are discarded; at most one source-quoted general
+   criterion replaces any unsupported criteria for that line. A concise warning
+   is recorded in the job-analysis cache and report. Other invalid extractions
+   still fail explicitly. Reparse older cached analyses with
+   `--refresh-job-analysis` after this source-boundary change.
 2. Matches criteria against the complete original CV. Explicit technology and
    language matches use local rules; unresolved semantic criteria use retrieved
    CV evidence and model verification. Any-of groups need one supported option;

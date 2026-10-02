@@ -24,7 +24,7 @@ SECTION_IMPORTANCE = (
     (
         r"what (?:we['\u2019]re|we are) looking for|requirements|"
         r"(?:required|minimum|essential|basic) qualifications|must[- ]haves?|"
-        r"apply,? if you have",
+        r"apply,? if you have|what does it take to fit the bill\?",
         "required",
     ),
     (
@@ -90,10 +90,10 @@ def prepare_job_description(description: str) -> str:
             and (
                 re.match(r"^[a-z(]", line)
                 or re.search(
-                    r"(?:[,;:]|\b(?:and|or|for|with|across|of|to|the))$", lines[-1]
+                    r"(?:[,:]|\b(?:and|or|for|with|across|of|to|the))$", lines[-1]
                 )
             )
-            and not lines[-1].endswith((".", "!", "?"))
+            and not lines[-1].endswith((".", "!", "?", ";"))
         ):
             lines[-1] += ("" if lines[-1].endswith("-") else " ") + line
         else:
@@ -133,7 +133,8 @@ def source_clauses(line: str) -> list[str]:
     return [
         part.strip()
         for part in re.split(
-            r"\n|\s*•\s*|(?<=[.!?])(?<!e\.g\.)(?<!i\.e\.)(?<!vs\.)"
+            r"\n|\s*•\s*|(?<=;)\s+(?=(?:You|We|Your|Our|The|This|Thus|"
+            r"Moreover|Additionally)\b)|(?<=[.!?])(?<!e\.g\.)(?<!i\.e\.)(?<!vs\.)"
             r"(?:\s+|(?=[A-Z]))(?=[A-Z])",
             line,
         )
@@ -359,7 +360,7 @@ def source_importance(description: str, requirement: Requirement) -> str:
     if requirement.importance == "eligibility":
         return "eligibility"
     quote = normalized(requirement.quote)
-    if re.search(r"\b(?:nice.to.have|preferred|optional|a plus)\b", quote):
+    if re.search(r"\b(?:nice.to.have|preferred|optional|(?:a|big) plus)\b", quote):
         return "preferred"
     if re.search(r"\b(?:required|must|mandatory)\b", quote):
         return "required"
@@ -460,9 +461,11 @@ def normalize_criteria(requirement: Requirement) -> list[RequirementCriterion]:
 def recover_unquoted_options(
     requirement: Requirement,
 ) -> tuple[Requirement, list[str]]:
-    """Keep only sourced options; assess an optionless clause from its source quote."""
+    """Discard unsourced options without multiplying quote-based criteria."""
     criteria = []
-    warnings = []
+    discarded = set()
+    fallback = None
+    fallback_index = 0
     for criterion in requirement.criteria:
         valid = [
             option
@@ -472,16 +475,12 @@ def recover_unquoted_options(
         ]
         removed = [option for option in criterion.options if option not in valid]
         if removed:
-            warning = (
-                f"Job analysis for {requirement.quote!r}: discarded unquoted "
-                f"option(s) {removed!r}"
-            )
+            discarded.update(normalized(option) for option in removed)
             if not valid:
-                warning += "; using the source quote as a general criterion"
-                source = canonical_text(criterion.quote)
-                role = ROLE_TITLE.match(source)
-                criteria.append(
-                    criterion.model_copy(
+                if fallback is None:
+                    source = canonical_text(criterion.quote)
+                    role = ROLE_TITLE.match(source)
+                    fallback = criterion.model_copy(
                         update={
                             "text": (
                                 source[role.end() :]
@@ -492,13 +491,27 @@ def recover_unquoted_options(
                             "options": [],
                         }
                     )
-                )
+                    fallback_index = len(criteria)
             else:
                 criteria.append(criterion.model_copy(update={"options": valid}))
-            warnings.append(warning + ".")
         else:
             criteria.append(criterion)
-    return requirement.model_copy(update={"criteria": criteria}), warnings
+    if fallback is not None and not any(
+        item.kind == "general" and normalized(item.text) == normalized(fallback.text)
+        for item in criteria
+    ):
+        criteria.insert(fallback_index, fallback)
+    if not discarded:
+        return requirement.model_copy(update={"criteria": criteria}), []
+    quote = canonical_text(requirement.quote)
+    preview = quote[:77] + "..." if len(quote) > 80 else quote
+    warning = (
+        f"Job analysis for {preview!r}: discarded {len(discarded)} "
+        "unquoted option(s)"
+    )
+    if fallback is not None:
+        warning += "; using one source-quoted general criterion"
+    return requirement.model_copy(update={"criteria": criteria}), [warning + "."]
 
 
 def job_description_chunks(description: str, max_chars: int = 800) -> list[str]:
@@ -539,7 +552,9 @@ def job_description_chunks(description: str, max_chars: int = 800) -> list[str]:
     return chunks
 
 
-def source_requirement_quotes(response: str, sources: dict[str, str]) -> str:
+def source_requirement_quotes(
+    response: str, sources: dict[str, str], skipped: set[str] | None = None
+) -> str:
     """Resolve compact source keys to quotes without asking the model to copy them."""
     try:
         job = json.loads(response)
@@ -555,6 +570,8 @@ def source_requirement_quotes(response: str, sources: dict[str, str]) -> str:
         if source_id not in sources:
             return response
         if requirement is None:
+            if skipped is not None:
+                skipped.add(source_id)
             continue
         if not isinstance(requirement, dict):
             return response
@@ -655,11 +672,12 @@ def job_extraction_schema(sources: dict[str, str]) -> dict:
                             "items": {
                                 "type": "string",
                                 "pattern": option_pattern,
+                                "maxLength": 80,
                             },
                             **(
                                 {"maxItems": 0}
                                 if kind == "general"
-                                else {"minItems": 1, "maxItems": word_count}
+                                else {"minItems": 1, "maxItems": min(12, word_count)}
                             ),
                         },
                     },
@@ -768,6 +786,7 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
         }
         feedback = ""
         for attempt in range(3):
+            skipped: set[str] = set()
             try:
                 job = request(
                     llm,
@@ -776,7 +795,7 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
                     {"source_lines": sources},
                     json_schema=job_extraction_schema(sources),
                     transform_response=lambda response: source_requirement_quotes(
-                        response, sources
+                        response, sources, skipped
                     ),
                     stage="job_parsing",
                 )
@@ -785,9 +804,10 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
                 )
                 missing = [
                     quote
-                    for quote in sources.values()
+                    for source_id, quote in sources.items()
                     if keyed
                     and normalized(quote) in sectioned_lines
+                    and source_id not in skipped
                     and not any(
                         normalized(item.quote) in normalized(quote)
                         for item in job.requirements
@@ -882,4 +902,3 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
                 )
             unique.append(requirement)
     return ParsedJob(requirements=unique, warnings=warnings)
-
