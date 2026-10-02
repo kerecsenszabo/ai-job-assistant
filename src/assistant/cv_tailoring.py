@@ -434,6 +434,26 @@ def split_criterion(criterion: RequirementCriterion) -> list[RequirementCriterio
     for option in dict.fromkeys(criterion.options):
         if criterion.kind == "technology" and FUNCTION_WORDS.fullmatch(option.strip()):
             continue
+        technology_change = (
+            re.search(
+                r"\btechnology(?:\s+\w+){0,3}\s+chang(?:e|es|ed|ing)\b",
+                criterion.quote,
+                re.IGNORECASE,
+            )
+            if criterion.kind == "technology"
+            and re.fullmatch(r"technology changes?", normalized(option))
+            else None
+        )
+        if technology_change:
+            general.append(
+                RequirementCriterion(
+                    id=criterion.id,
+                    text=technology_change.group(),
+                    quote=criterion.quote,
+                    kind="general",
+                )
+            )
+            continue
         if (
             OPTION_DESCRIPTORS.search(normalized(option))
             or criterion.kind == "technology"
@@ -850,7 +870,10 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
         "requirements or criteria to fill the response. Never split a clause "
         "into individual words or treat ordinary words as technology names. "
         "Training, monitoring, forecasting, planning, pipelines and adjectives "
-        "are capabilities, not technology names. Never extract standalone "
+        "are capabilities, not technology names. Keeping up with changing "
+        "technology is a general criterion, not a technology option; do not "
+        "paraphrase it as 'technology changes'. Only named technologies may "
+        "have technology options. Never extract standalone "
         "function words (and, with, using) as criteria. One general criterion "
         "can cover a complete clause; do not fill every available schema slot. "
         "Return no more than twelve meaningful criteria per source line. "

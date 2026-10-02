@@ -684,6 +684,61 @@ def test_parser_converts_ordinary_capabilities_to_general_criteria():
     assert len(calls) == 1
 
 
+def test_parser_converts_paraphrased_technology_change_to_general_criterion():
+    source = (
+        "Stay up to date on how technology has been changing in the last year "
+        "and build solutions using Python."
+    )
+    response = {
+        "requirements": {
+            "source/0": {
+                "importance": "required",
+                "criteria": [
+                    {
+                        "text": "technology changes",
+                        "kind": "technology",
+                        "options": ["technology changes", "Python"],
+                    }
+                ],
+            }
+        }
+    }
+    llm, calls = fake_llm([response])
+    criteria = parse_job(llm, source).requirements[0].criteria
+    assert len(calls) == 1
+    assert [(item.kind, item.options) for item in criteria] == [
+        ("technology", ["Python"]),
+        ("general", []),
+    ]
+    assert criteria[1].text == "technology has been changing"
+    assert criteria[1].quote == source
+
+
+def test_parser_rejects_unquoted_technology_changes():
+    llm, calls = fake_llm(
+        [
+            {
+                "requirements": {
+                    "source/0": {
+                        "importance": "required",
+                        "criteria": [
+                            {
+                                "text": "technology changes",
+                                "kind": "technology",
+                                "options": ["technology changes"],
+                            }
+                        ],
+                    }
+                }
+            }
+        ]
+        * 3
+    )
+    with pytest.raises(ModelOutputError, match="absent from its source quote"):
+        parse_job(llm, "Build Python services.")
+    assert len(calls) == 3
+
+
 def test_parser_keeps_named_tools_when_model_adds_function_words_and_capabilities():
     source = "Build training pipelines using Databricks and MLflow."
     response = {
