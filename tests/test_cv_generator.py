@@ -5,7 +5,7 @@ import pytest
 from langchain_core.runnables import RunnableLambda
 
 from assistant import cli, cv_generator
-from assistant.cv_generator import CV, escape_latex, to_latex
+from assistant.cv_generator import CV, PageSettings, escape_latex, to_latex
 from assistant.cv_tailoring import TailoringReport
 
 
@@ -36,7 +36,7 @@ def test_latex_preserves_sections_and_escapes_text():
         ],
     )
     latex = to_latex(cv)
-    assert r"\documentclass[11pt,a4paper]{article}" in latex
+    assert r"\documentclass[12pt,a4paper]{article}" in latex
     assert r"Example \& Co" in latex
     assert r"10\%" in latex
     for title in (
@@ -56,6 +56,77 @@ def test_languages_are_optional_for_existing_source_cvs():
     cv = CV(name="Example")
     assert cv.languages == []
     assert r"\section*{Languages}" not in to_latex(cv)
+
+
+def test_latex_uses_custom_page_settings_without_changing_cv():
+    cv = CV(name="Example")
+    latex = to_latex(cv, page_settings=PageSettings("letter", 11, 2.5))
+    assert r"\documentclass[11pt,letterpaper]{article}" in latex
+    assert r"\usepackage[margin=2.5cm]{geometry}" in latex
+    assert r"\documentclass[12pt,a4paper]{article}" in to_latex(cv)
+
+
+def test_cli_applies_page_settings_to_pdf(tmp_path, monkeypatch):
+    from assistant import cv_tailoring
+
+    source = tmp_path / "source.json"
+    source.write_text(CV(name="Example").model_dump_json())
+    output = tmp_path / "cv.pdf"
+    monkeypatch.setattr(cv_generator, "local_llm", lambda model: object())
+    monkeypatch.setattr(
+        cv_tailoring,
+        "polish_with_report",
+        lambda cv, llm: (cv, TailoringReport()),
+    )
+    monkeypatch.setattr(
+        cv_generator, "write_pdf", lambda latex, path: path.write_text(latex)
+    )
+    cli.main(
+        [
+            "generate",
+            "--cv",
+            str(source),
+            "--output",
+            str(output),
+            "--paper-size",
+            "letter",
+            "--font-size",
+            "12",
+            "--margin-cm",
+            "2.5",
+        ]
+    )
+    assert r"\documentclass[12pt,letterpaper]{article}" in output.read_text()
+    assert r"\usepackage[margin=2.5cm]{geometry}" in output.read_text()
+
+
+@pytest.mark.parametrize(
+    "option,value",
+    [
+        ("--paper-size", "tabloid"),
+        ("--font-size", "13"),
+        ("--margin-cm", "0"),
+        ("--margin-cm", "5.1"),
+        ("--margin-cm", "nan"),
+        ("--margin-cm", "inf"),
+        ("--margin-cm", r"1cm,includehead"),
+    ],
+)
+def test_cli_rejects_invalid_page_settings(tmp_path, capsys, option, value):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(
+            [
+                "generate",
+                "--cv",
+                str(tmp_path / "source.json"),
+                "--output",
+                str(tmp_path / "cv.pdf"),
+                option,
+                value,
+            ]
+        )
+    assert exc.value.code == 2
+    assert "error:" in capsys.readouterr().err
 
 
 def test_latex_renders_anonymous_project_bullets_under_employer_heading():
@@ -171,6 +242,7 @@ def test_cli_general_cv_also_writes_rewrite_audit(tmp_path, monkeypatch):
     )
     assert output.with_suffix(".report.json").exists()
     assert not cache_dir.exists()
+    assert r"\documentclass[12pt,a4paper]{article}" in output.read_text()
 
 
 def test_cli_exports_rewritten_experience_for_every_role(tmp_path, monkeypatch):

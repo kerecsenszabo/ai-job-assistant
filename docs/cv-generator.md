@@ -53,8 +53,8 @@ roles, dates, education, languages, publications and certifications from the
 structured source.
 
 Tailoring selects up to 14 skills, 4 AI-native items and 6 bullets per matched
-role, with up to 2 original context bullets for unmatched roles. Layout is
-compact 11pt A4; page count depends on content.
+role, with up to 2 original context bullets for unmatched roles. The default
+layout is compact 12pt A4 with 1.6 cm margins; page count depends on content.
 
 Missing CV evidence is not proof that you lack a skill. Automated review cannot
 guarantee factual accuracy. Inspect the final document before sending it.
@@ -90,6 +90,9 @@ Run `uv run job-assistant generate --help` for all options.
 | Option | Purpose |
 |---|---|
 | `--model NAME` | Choose an installed Ollama model; default `gemma4:e2b-it-qat` |
+| `--paper-size {a4,letter}` | PDF page size; default A4 |
+| `--font-size {10,11,12}` | Base LaTeX font size in points; default 12 |
+| `--margin-cm CM` | Uniform page margins from 0.5 to 5 cm; default 1.6 |
 | `--rubric FILE` | Override weights, e.g. `{"required_weight": 4, "partial_credit": 0.25}` |
 | `--job-cache DIR` | Parsed-job cache; default `output/job-requirements/` |
 | `--refresh-job-analysis` | Reparse the job and refresh matching |

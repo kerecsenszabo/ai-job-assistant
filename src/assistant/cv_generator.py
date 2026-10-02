@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -30,6 +31,23 @@ MAX_SKILLS = 14
 MAX_AI_NATIVE = 4
 MAX_BULLETS = 6
 CONTEXT_BULLETS = 2
+
+
+@dataclass(frozen=True)
+class PageSettings:
+    paper_size: str = "a4"
+    font_size: int = 12
+    margin_cm: float = 1.6
+
+
+def margin_cm(value: str) -> float:
+    try:
+        margin = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("margin must be a number in cm") from exc
+    if not math.isfinite(margin) or not 0.5 <= margin <= 5:
+        raise argparse.ArgumentTypeError("margin must be between 0.5 and 5 cm")
+    return margin
 
 
 @dataclass
@@ -316,7 +334,7 @@ def escape_latex(value: str) -> str:
     return "".join(replacements.get(char, char) for char in value)
 
 
-def to_latex(cv: CV) -> str:
+def to_latex(cv: CV, *, page_settings: PageSettings = PageSettings()) -> str:
     """Render a CV to a compact, ATS-friendly LaTeX document."""
     contact = " | ".join(
         escape_latex(value)
@@ -324,8 +342,8 @@ def to_latex(cv: CV) -> str:
         if value
     )
     lines = [
-        r"\documentclass[11pt,a4paper]{article}",
-        r"\usepackage[margin=1.6cm]{geometry}",
+        rf"\documentclass[{page_settings.font_size}pt,{page_settings.paper_size}paper]{{article}}",
+        rf"\usepackage[margin={page_settings.margin_cm:g}cm]{{geometry}}",
         r"\usepackage[hidelinks]{hyperref}",
         r"\usepackage{enumitem}",
         r"\setlist[itemize]{leftmargin=*,nosep}",
@@ -458,6 +476,26 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--output", type=Path, required=True, help="Output PDF path")
     parser.add_argument("--model", default=MODEL, help="Ollama model name")
     parser.add_argument(
+        "--paper-size",
+        choices=("a4", "letter"),
+        default="a4",
+        help="PDF paper size (default: a4)",
+    )
+    parser.add_argument(
+        "--font-size",
+        type=int,
+        choices=(10, 11, 12),
+        default=12,
+        help="Base font size in points (default: 12)",
+    )
+    parser.add_argument(
+        "--margin-cm",
+        type=margin_cm,
+        default=1.6,
+        metavar="CM",
+        help="Page margins in cm, from 0.5 to 5 (default: 1.6)",
+    )
+    parser.add_argument(
         "--rubric",
         type=Path,
         help="Optional scoring rubric JSON with requirement weights",
@@ -551,7 +589,13 @@ def main(argv: list[str] | None = None) -> None:
         import_performance.stage_model_seconds
     )
     export_started = time.perf_counter()
-    write_pdf(to_latex(cv), args.output)
+    write_pdf(
+        to_latex(
+            cv,
+            page_settings=PageSettings(args.paper_size, args.font_size, args.margin_cm),
+        ),
+        args.output,
+    )
     args.output.with_suffix(".json").write_text(
         cv.model_dump_json(indent=2), encoding="utf-8"
     )
