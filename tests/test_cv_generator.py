@@ -471,8 +471,8 @@ def test_tailor_cv_passes_optional_cache_settings(tmp_path, monkeypatch, opt_in)
     ]
 
 
-def test_default_model_is_granite_3b():
-    assert cv_generator.MODEL == "granite4.2:3b"
+def test_default_model_is_current_winner():
+    assert cv_generator.MODEL == "gemma4:e2b-it-qat"
 
 
 def test_cli_can_disable_matching_cache(tmp_path, monkeypatch):

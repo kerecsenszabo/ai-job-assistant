@@ -11,7 +11,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from assistant.cv_generator import CV, TailorDiagnostics, load_cv, local_llm, tailor_cv
+from assistant.cv_generator import (
+    CONTEXT_TOKENS,
+    CV,
+    TailorDiagnostics,
+    load_cv,
+    local_llm,
+    tailor_cv,
+)
 from assistant.cv_parser import read_document
 
 DEFAULT_DATABASE = Path("output/benchmarks.sqlite")
@@ -277,7 +284,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
             datetime.now(UTC).isoformat(),
             command_output("ollama", "--version"),
             str(args.cv),
-            16384,
+            CONTEXT_TOKENS,
         ),
     )
     connection.executemany(
@@ -424,7 +431,7 @@ def list_models() -> None:
         )
     print(
         "\nDownload sizes are not runtime RAM. This shortlist targets 8 GB total RAM;\n"
-        "16K context, runtime buffers and the OS need additional memory.\n"
+        f"{CONTEXT_TOKENS:,}-token context, runtime buffers and the OS need additional memory.\n"
         "Candidate peak memory and swap use must be measured before deployment."
     )
 

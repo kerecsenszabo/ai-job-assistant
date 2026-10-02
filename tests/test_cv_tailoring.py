@@ -684,20 +684,45 @@ def test_parser_converts_ordinary_capabilities_to_general_criteria():
     assert len(calls) == 1
 
 
-def test_parser_converts_paraphrased_technology_change_to_general_criterion():
-    source = (
-        "Stay up to date on how technology has been changing in the last year "
-        "and build solutions using Python."
-    )
+@pytest.mark.parametrize(
+    ("source", "option", "expected"),
+    [
+        (
+            "Stay up to date on how technology has been changing in the last year "
+            "and build solutions using Python.",
+            "technology changes",
+            "technology has been changing",
+        ),
+        (
+            "Be a team player who can ask and share their ideas without hesitation "
+            "and build solutions using Python.",
+            "share ideas",
+            "share their ideas",
+        ),
+        (
+            "Share their ideas and build solutions using Python.",
+            "Share ideas",
+            "Share their ideas",
+        ),
+        (
+            "Apply analysis of the methods using Python.",
+            "analysis methods",
+            "analysis of the methods",
+        ),
+    ],
+)
+def test_parser_converts_paraphrased_capabilities_to_general_criteria(
+    source, option, expected
+):
     response = {
         "requirements": {
             "source/0": {
                 "importance": "required",
                 "criteria": [
                     {
-                        "text": "technology changes",
+                        "text": option,
                         "kind": "technology",
-                        "options": ["technology changes", "Python"],
+                        "options": [option, "Python"],
                     }
                 ],
             }
@@ -710,11 +735,12 @@ def test_parser_converts_paraphrased_technology_change_to_general_criterion():
         ("technology", ["Python"]),
         ("general", []),
     ]
-    assert criteria[1].text == "technology has been changing"
+    assert criteria[1].text == expected
     assert criteria[1].quote == source
 
 
-def test_parser_rejects_unquoted_technology_changes():
+@pytest.mark.parametrize("option", ["technology changes", "share ideas", "Python SQL"])
+def test_parser_recovers_unquoted_options_from_source_after_retries(option):
     llm, calls = fake_llm(
         [
             {
@@ -723,9 +749,9 @@ def test_parser_rejects_unquoted_technology_changes():
                         "importance": "required",
                         "criteria": [
                             {
-                                "text": "technology changes",
+                                "text": option,
                                 "kind": "technology",
-                                "options": ["technology changes"],
+                                "options": [option],
                             }
                         ],
                     }
@@ -734,9 +760,165 @@ def test_parser_rejects_unquoted_technology_changes():
         ]
         * 3
     )
-    with pytest.raises(ModelOutputError, match="absent from its source quote"):
-        parse_job(llm, "Build Python services.")
+    parsed = parse_job(llm, "Build Python services.")
     assert len(calls) == 3
+    assert parsed.requirements[0].criteria[0].kind == "general"
+    assert parsed.requirements[0].criteria[0].text == "Build Python services."
+    assert parsed.requirements[0].criteria[0].options == []
+    assert option in parsed.warnings[0]
+
+
+@pytest.mark.parametrize("option", ["engineers", "Engineer"])
+def test_parser_uses_responsibility_instead_of_role_as_technology(option):
+    source = (
+        "As a Data Engineer, you are expected to deliver (across industries) "
+        "on some of our most complex projects - individually or by leading "
+        "small delivery teams."
+    )
+    llm, calls = fake_llm(
+        [
+            {
+                "requirements": {
+                    "source/0": {
+                        "importance": "responsibility",
+                        "criteria": [
+                            {"text": option, "kind": "technology", "options": [option]}
+                        ],
+                    }
+                }
+            }
+        ]
+        * 3
+    )
+    parsed = parse_job(llm, source)
+    criteria = parsed.requirements[0].criteria
+    assert len(calls) == (3 if option == "engineers" else 1)
+    assert len(criteria) == 1
+    assert criteria[0].kind == "general"
+    assert criteria[0].options == []
+    assert criteria[0].text == source.split(", ", 1)[1]
+    assert criteria[0].quote == source
+    if option == "engineers":
+        assert option in parsed.warnings[0]
+    else:
+        assert not parsed.warnings
+
+
+def test_parser_preserves_named_tool_while_discarding_role_option():
+    source = "As a Data Engineer, deliver projects using Python."
+    llm, _ = fake_llm(
+        [
+            {
+                "requirements": {
+                    "source/0": {
+                        "importance": "responsibility",
+                        "criteria": [
+                            {
+                                "text": "engineers and Python",
+                                "kind": "technology",
+                                "options": ["engineers", "Python"],
+                            }
+                        ],
+                    }
+                }
+            }
+        ]
+        * 3
+    )
+    parsed = parse_job(llm, source)
+    criteria = parsed.requirements[0].criteria
+    assert [(item.kind, item.options) for item in criteria] == [
+        ("technology", ["Python"]),
+    ]
+    assert "engineers" in parsed.warnings[0]
+
+
+def test_parser_recovers_unquoted_role_without_job_title_from_source():
+    option = "engineers"
+    llm, calls = fake_llm(
+        [
+            {
+                "requirements": {
+                    "source/0": {
+                        "importance": "required",
+                        "criteria": [
+                            {"text": option, "kind": "technology", "options": [option]}
+                        ],
+                    }
+                }
+            }
+        ]
+        * 3
+    )
+    parsed = parse_job(llm, "Build Python services.")
+    assert len(calls) == 3
+    assert parsed.requirements[0].criteria[0].text == "Build Python services."
+    assert parsed.warnings
+
+
+def test_parser_preserves_valid_criteria_when_another_option_is_unquoted():
+    source = "Build Python pipelines and maintain SQL models."
+    response = {
+        "requirements": {
+            "source/0": {
+                "importance": "required",
+                "criteria": [
+                    {"text": "Python", "kind": "technology", "options": ["Python"]},
+                    {"text": "Rust", "kind": "technology", "options": ["Rust"]},
+                    {"text": "SQL", "kind": "technology", "options": ["SQL"]},
+                ],
+            }
+        }
+    }
+    llm, _ = fake_llm([response] * 3)
+    parsed = parse_job(llm, source)
+    assert [(item.kind, item.options) for item in parsed.requirements[0].criteria] == [
+        ("technology", ["Python"]),
+        ("general", []),
+        ("technology", ["SQL"]),
+    ]
+    assert parsed.requirements[0].criteria[1].text == source
+    assert "Rust" in parsed.warnings[0]
+
+
+@pytest.mark.parametrize(("kind", "option"), [("technology", ""), ("language", "French")])
+def test_parser_recovers_invalid_option_without_claiming_explicit_match(kind, option):
+    source = "Professional working proficiency in English."
+    response = {
+        "requirements": {
+            "source/0": {
+                "importance": "required",
+                "criteria": [{"text": option or "English", "kind": kind, "options": [option]}],
+            }
+        }
+    }
+    llm, calls = fake_llm([response] * 3)
+    parsed = parse_job(llm, source)
+    assert len(calls) == 3
+    assert parsed.requirements[0].criteria[0].kind == "general"
+    assert parsed.requirements[0].criteria[0].options == []
+    assert parsed.warnings
+
+
+def test_recovered_job_warning_is_visible_in_tailoring_report(cv, monkeypatch):
+    from assistant import job_requirements, match_cache
+
+    monkeypatch.setattr(
+        job_requirements,
+        "get_parsed_job",
+        lambda *args, **kwargs: (
+            ParsedJob(requirements=[], warnings=["Unquoted job option discarded."]),
+            "job-hash",
+            False,
+        ),
+    )
+    monkeypatch.setattr(
+        match_cache,
+        "get_cached_matches",
+        lambda *args, **kwargs: ([], "match-hash", False),
+    )
+    _, report = tailor_with_report(cv, "A job description.", fake_llm([])[0])
+    assert "Unquoted job option discarded." in report.warnings
 
 
 def test_parser_keeps_named_tools_when_model_adds_function_words_and_capabilities():
@@ -792,7 +974,6 @@ def test_parse_job_retries_invalid_options_with_validation_feedback():
     "response",
     [
         "invalid JSON",
-        keyed_requirement(["Rust"]),
         {"requirements": {"unknown/source": None}},
     ],
 )
@@ -807,10 +988,12 @@ def test_long_job_parsing_preserves_original_section_priority():
     first_line = "Build Python pipelines. " + "Reliable " * 85
     description = first_line + "\nNice-to-have\nAWS"
     assert len(description) > 800
-    aws = keyed_requirement(["AWS"])
-    aws["requirements"]["source/0"]["criteria"][0]["text"] = "AWS"
     response = keyed_requirement()
-    response["requirements"]["source/1"] = aws["requirements"]["source/0"]
+    response["requirements"]["source/1"] = None
+    response["requirements"]["source/2"] = {
+        "importance": "preferred",
+        "criteria": [{"text": "AWS", "kind": "technology", "options": ["AWS"]}],
+    }
     llm, calls = fake_llm([response])
     parsed = parse_job(llm, description)
     assert len(calls) == 1
@@ -819,7 +1002,70 @@ def test_long_job_parsing_preserves_original_section_priority():
         "requirement/1",
     ]
     assert parsed.requirements[1].importance == "preferred"
-    assert parsed.requirements[0].quote == first_line.strip()
+    assert parsed.requirements[0].quote == "Build Python pipelines."
+
+
+def test_copied_job_sentences_and_bullets_become_atomic_source_quotes():
+    description = (
+        "DescriptionWe follow trends. Share their ideas without hesitation."
+        "As an engineer, use Python.\n"
+        "What You Will Do Daily• Build ML models• Review results."
+    )
+    assert assessable_job_lines(description) == [
+        "We follow trends.",
+        "Share their ideas without hesitation.",
+        "As an engineer, use Python.",
+        "Build ML models",
+        "Review results.",
+    ]
+
+
+def test_company_intro_preceding_explicit_description_is_not_a_requirement():
+    description = (
+        "About the job\n"
+        "We are Example Co. We advance technology through innovation.\n"
+        "DescriptionWe are looking for an AI engineer. Work with Python."
+    )
+    assert assessable_job_lines(description) == [
+        "We are looking for an AI engineer.",
+        "Work with Python.",
+    ]
+    assert assessable_job_lines("About the job\nWork with Python.") == [
+        "Work with Python."
+    ]
+
+
+def test_inline_section_headings_keep_their_source_priority():
+    description = (
+        "What You Will Do Daily• Build Python models• Share results.\n"
+        "Apply, If You Have• 5+ years of experience in AI"
+    )
+    assert assessable_job_lines(description) == [
+        "Build Python models",
+        "Share results.",
+        "5+ years of experience in AI",
+    ]
+
+    def respond(prompt, **kwargs):
+        sources = json.loads(prompt.to_messages()[-1].content)["source_lines"]
+        return json.dumps(
+            {
+                "requirements": {
+                    source_id: {
+                        "importance": "required",
+                        "criteria": [{"text": quote, "kind": "general", "options": []}],
+                    }
+                    for source_id, quote in sources.items()
+                }
+            }
+        )
+
+    parsed = parse_job(RunnableLambda(respond), description)
+    assert [item.importance for item in parsed.requirements] == [
+        "responsibility",
+        "responsibility",
+        "required",
+    ]
 
 
 def test_job_chunks_preserve_source_content():

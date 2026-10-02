@@ -69,6 +69,20 @@ def test_cache_hit_skips_parser_and_preserves_full_job(tmp_path, parser):
     assert list(tmp_path.glob("*.tmp")) == []
 
 
+def test_recovery_warnings_survive_job_cache(tmp_path, monkeypatch):
+    warning = "Job analysis: discarded an unquoted option."
+    monkeypatch.setattr(
+        cv_tailoring,
+        "parse_job",
+        lambda llm, description: ParsedJob(requirements=[], warnings=[warning]),
+    )
+    parsed, _, cached = get_parsed_job("Python", object(), cache_dir=tmp_path)
+    assert not cached
+    reused, _, cached = get_parsed_job("Python", object(), cache_dir=tmp_path)
+    assert cached
+    assert parsed.warnings == reused.warnings == [warning]
+
+
 def test_changed_description_gets_its_own_analysis(tmp_path, parser):
     first, first_hash, _ = get_parsed_job(
         "Python required", object(), cache_dir=tmp_path

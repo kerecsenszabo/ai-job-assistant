@@ -24,7 +24,7 @@ def test_cache_identity_includes_model_digest_and_inference_settings(monkeypatch
         "model": "granite4.2:3b",
         "digest": "weights-v1",
         "temperature": 0,
-        "num_ctx": 16384,
+        "num_ctx": cv_generator.CONTEXT_TOKENS,
         "reasoning": False,
     }
     assert requested == [("http://localhost:11434/api/tags", 5)]

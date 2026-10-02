@@ -29,7 +29,11 @@ The job describes what to emphasize, never new candidate facts. The pipeline:
 
 1. Extracts source-linked, atomic job criteria, separating required, preferred,
    responsibilities and eligibility constraints. Long descriptions use bounded
-   chunks; invalid extraction retries with feedback, then fails explicitly.
+   chunks; invalid extraction retries with feedback. If options are still
+   absent from their source quotes, they are discarded, with an optionless
+   clause assessed conservatively from its source quote. The recovery is
+   recorded in the job-analysis cache and the report warnings. Other invalid
+   extractions still fail explicitly.
 2. Matches criteria against the complete original CV. Explicit technology and
    language matches use local rules; unresolved semantic criteria use retrieved
    CV evidence and model verification. Any-of groups need one supported option;
@@ -46,6 +50,12 @@ The job describes what to emphasize, never new candidate facts. The pipeline:
    and reviewed by the same safeguards; if still unsupported, the original
    summary remains. Supported summaries may be retained or subtly adapted to
    the role rather than replaced wholesale.
+
+The implementation separates shared models and request handling
+(`cv_tailoring_core.py`), job extraction (`job_parsing.py`), evidence matching
+(`cv_matching.py`), and audited rewriting (`cv_rewriting.py`). The
+`cv_tailoring.py` entry point retains the existing caller-facing imports and
+orchestrates these stages.
 
 Without a job, all sections and bullets remain, experience wording is polished,
 and the summary is unchanged. Both modes preserve contact details, employers,
@@ -138,7 +148,7 @@ runtime, match/must-have coverage, accepted/rejected/unclear rewrites, model cal
 and matching/rewriting stage times. Full CV outputs and audits remain in SQLite.
 Keyword-overlap and output-diversity metrics are no longer part of the benchmark.
 Match coverage is not a model-quality score. Model download sizes are not runtime
-RAM; the 16K context, runtime buffers and OS need additional memory.
+RAM; the 20,000-token context, runtime buffers and OS need additional memory.
 Peak RAM and swap are not measured.
 
 Only the current benchmark schema is supported. Historical databases are kept

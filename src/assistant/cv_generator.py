@@ -624,7 +624,7 @@ def main(argv: list[str] | None = None) -> None:
             if report.match_percent is not None
             else "insufficient information"
         )
-        print(f"CV-evidenced job match: {match}")
+        print(f"CV-evidenced job match: {match} (not a hiring probability)")
         if report.must_have_percent is not None:
             print(f"Must-have coverage: {report.must_have_percent:.1f}%")
         if report.unresolved_eligibility_ids:

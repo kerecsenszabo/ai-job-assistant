@@ -83,7 +83,7 @@ def test_list_models_shows_current_suite(monkeypatch, capsys):
         assert line.split() == [
             model,
             *size.split(),
-            tier,
+            *tier.split(),
             "yes" if model == "granite4.2:3b" else "no",
         ]
     assert "Download sizes are not runtime RAM" in output
@@ -346,6 +346,9 @@ def test_benchmark_matrix_persists_successes_and_failures(
     )
     assert unloaded == ["first", "second"]
     with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT context_tokens FROM benchmark_runs"
+        ).fetchone() == (benchmark.CONTEXT_TOKENS,)
         assert connection.execute(
             "SELECT status, COUNT(*) FROM benchmark_results GROUP BY status ORDER BY status"
         ).fetchall() == [("error", 1), ("ok", 7)]

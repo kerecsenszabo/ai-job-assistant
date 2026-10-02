@@ -310,6 +310,7 @@ def test_benchmark_pdf_import_is_shared_and_saved(pdf, source, tmp_path, monkeyp
             pull=False,
             database=tmp_path / "benchmark.sqlite",
             job_cache=tmp_path / "jobs",
+            refresh_job_analysis=False,
         )
     )
     assert imports == [(pdf, "first")]
