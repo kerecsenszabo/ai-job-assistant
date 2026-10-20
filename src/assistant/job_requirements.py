@@ -56,6 +56,7 @@ def get_parsed_job(
     *,
     cache_dir: Path | None,
     refresh: bool = False,
+    model_name: str | None = None,
 ) -> tuple[ParsedJob, str, bool]:
     """Reuse a job-only parse, or explicitly refresh it with the supplied model."""
     from assistant.cv_tailoring import ParsedJob, parse_job
@@ -72,7 +73,8 @@ def get_parsed_job(
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    cache_path = cache_dir / f"{fingerprint}.json"
+    model_prefix = f"{model_name}_" if model_name else ""
+    cache_path = cache_dir / f"{model_prefix}{fingerprint}.json"
     if not refresh:
         try:
             cached = cache_path.read_text(encoding="utf-8")

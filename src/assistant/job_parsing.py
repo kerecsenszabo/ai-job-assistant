@@ -622,6 +622,10 @@ def source_option(option: str, quote: str) -> str:
     return matches.pop() if len(matches) == 1 else option
 
 
+def safe_escape(s: str) -> str:
+    return re.sub(r"([.*+?^${}()|\[\]\\])", r"\\\1", s)
+
+
 def source_option_pattern(quote: str) -> str:
     """Allow only contiguous source-word spans, including multiword tool names."""
     words = list(re.finditer(r"(?:\.[A-Za-z]|[A-Za-z0-9])[A-Za-z0-9+.#/-]*", quote))
@@ -632,9 +636,9 @@ def source_option_pattern(quote: str) -> str:
         end = word.end()
         while end > word.start() and quote[end - 1] in ".-/":
             end -= 1
-        literal = re.escape(quote[word.start() : end])
+        literal = safe_escape(quote[word.start() : end])
         if suffix:
-            separator = re.escape(quote[end : words[index + 1].start()])
+            separator = safe_escape(quote[end : words[index + 1].start()])
             suffix = literal + "(?:" + separator + suffix + ")?"
         else:
             suffix = literal
@@ -713,50 +717,18 @@ def job_extraction_schema(sources: dict[str, str]) -> dict:
 def parse_job(llm: Runnable, description: str) -> ParsedJob:
     instruction = (
         "Extract assessable job requirements from the supplied source lines. "
-        "Return a requirements object keyed by source ID. Use null for lines that contain "
-        "no assessable qualification, responsibility, or eligibility constraint. "
-        "Do not extract job titles, section headings, company descriptions, "
-        "or employee benefits. Do not invent requirements for these lines. "
-        "Return at most one requirement per source ID, using criteria to cover "
-        "its atomic assessable clauses. Do not output requirement text, IDs or quotes inside "
-        "requirements or criteria; these are attached from the source IDs. "
-        "Deduplicate equivalent "
-        "requirements; do not count repeated wording twice. Distinguish explicit "
-        "must-haves (required), nice-to-haves (preferred), responsibilities, and "
-        "explicit eligibility constraints. Do not invent must-haves. "
-        "Preserve source section priority: ALL bullets under 'What we're looking "
-        "for' or required qualifications are required, including English; only "
-        "explicit nice-to-haves are preferred. Include responsibilities too. "
-        "For each requirement extract criteria covering EVERY assessable clause. "
-        "Criteria inherit their parent's source line. Use "
-        "kind=technology only for explicit named tools, products, libraries or "
-        "model families, with options "
-        "containing only exact names from that quote. 'A, B, or C' means "
-        "operator=any, NOT all; 'A and B' means all. Examples introduced by "
-        "'e.g.' or 'such as' are alternatives unless explicitly all required. "
-        "Set production=true when production use is required. Use kind=language "
-        "for a named natural language and preserve the requested proficiency "
-        "phrase. Communication skills are a separate general criterion; they "
-        "cannot establish language proficiency. General criteria cover other "
-        "clauses, such as seniority, testing, CI/CD, or ownership. Do not turn "
-        "a single alternative list into separately required technologies. "
-        "Keep text concise. Extract each source clause only once; do not repeat "
-        "requirements or criteria to fill the response. Never split a clause "
-        "into individual words or treat ordinary words as technology names. "
-        "Training, monitoring, forecasting, planning, pipelines and adjectives "
-        "are capabilities, not technology names. Keeping up with changing "
-        "technology and sharing ideas are general criteria, not technology "
-        "options. Do not paraphrase source wording in options. Only named "
-        "technologies may have technology options. Job titles such as engineer "
-        "are not technologies; extract the actual responsibilities instead. "
-        "Never extract standalone "
-        "function words (and, with, using) as criteria. One general criterion "
-        "can cover a complete clause; do not fill every available schema slot. "
-        "Return no more than twelve meaningful criteria per source line. "
-        "Stop after the last "
-        "requirement. Options must be exact substrings of the corresponding "
-        "source line. General criteria should have empty options. "
-        "If there are no assessable requirements return an empty object."
+        "Return a requirements object keyed by source ID. "
+        "Use null for non-assessable lines. "
+        "Do not invent requirements or include job titles/benefits. "
+        "Return one requirement per source ID, covering atomic assessable clauses. "
+        "Deduplicate requirements. "
+        "Preserve section priority: ALL bullets in required sections are required, others preferred. "
+        "Extract criteria for EVERY assessable clause. "
+        "Use kind=technology for named tools/libraries, kind=language for languages, kind=general for others. "
+        "Use operator=any for 'A or B', all for 'A and B'. "
+        "Keep text concise. Do not repeat requirements or criteria. "
+        "Options must be exact substrings of the source line. "
+        "If no assessable requirements, return an empty object."
     )
     prepared = prepare_job_description(description)
     sectioned_lines = set()
@@ -787,6 +759,7 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
         feedback = ""
         for attempt in range(3):
             skipped: set[str] = set()
+            missing: list[str] = []
             try:
                 job = request(
                     llm,
@@ -869,11 +842,8 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
                 if attempt == 2:
                     raise
                 feedback = (
-                    "\nThe previous extraction failed validation: "
-                    f"{exc}\nRegenerate the extraction using only the supplied "
-                    "source lines. Do not invent options. Include all assessable "
-                    "lines under labeled requirements or responsibilities sections. "
-                    "Use null only for non-assessable lines."
+                    f"\nThe previous extraction failed validation: {exc} "
+                    f"Please include these missing lines in the requirements: {missing!r}."
                 )
         for requirement in job.requirements:
             if normalized(requirement.quote) not in normalized(chunk):

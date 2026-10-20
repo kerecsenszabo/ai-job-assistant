@@ -88,6 +88,7 @@ def _tailor_with_report(
     matching_cache: Path | None = None,
     refresh_matching: bool = False,
     model_identity: str | None = None,
+    model_name: str | None = None,
 ) -> tuple[CV, TailoringReport]:
     from assistant.job_requirements import get_parsed_job
     from assistant.match_cache import get_cached_matches
@@ -97,7 +98,7 @@ def _tailor_with_report(
     evidence = source_evidence(cv)
     with measure_stage("job_analysis"):
         job, fingerprint, cache_hit = get_parsed_job(
-            description, llm, cache_dir=job_cache, refresh=refresh_job_analysis
+            description, llm, cache_dir=job_cache, refresh=refresh_job_analysis, model_name=model_name
         )
     effective_rubric = rubric or ScoringRubric()
     with measure_stage("matching"):
@@ -189,6 +190,7 @@ def tailor_with_report(
     matching_cache: Path | None = None,
     refresh_matching: bool = False,
     model_identity: str | None = None,
+    model_name: str | None = None,
 ) -> tuple[CV, TailoringReport]:
     with measure_run() as performance:
         result, report = _tailor_with_report(
@@ -202,6 +204,7 @@ def tailor_with_report(
             matching_cache=matching_cache,
             refresh_matching=refresh_matching,
             model_identity=model_identity,
+            model_name=model_name,
         )
         report.performance = performance
         return result, report

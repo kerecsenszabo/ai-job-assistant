@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Callable, Literal, TypeVar
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
+from langchain_ollama import ChatOllama
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from assistant.cv_generator import (
@@ -16,6 +18,7 @@ from assistant.cv_generator import (
     CV,
     TailorDiagnostics,
     structured_llm,
+    supports_structured_output,
 )
 from assistant.performance import RunPerformance, measure_model_call
 
@@ -53,8 +56,8 @@ MatchStatus = Literal["direct", "partial", "not_evidenced", "unclear"]
 
 class RequirementCriterion(StrictModel):
     id: str
-    text: str = Field(min_length=1, pattern=r"\S")
-    quote: str = Field(min_length=1, pattern=r"\S")
+    text: str = Field(min_length=1)
+    quote: str = Field(min_length=1)
     kind: Literal["technology", "language", "general"] = "general"
     options: list[str] = Field(default_factory=list)
     operator: Literal["any", "all"] = "all"
@@ -65,8 +68,8 @@ class RequirementCriterion(StrictModel):
 
 class Requirement(StrictModel):
     id: str
-    text: str = Field(min_length=1, pattern=r"\S")
-    quote: str = Field(min_length=1, pattern=r"\S")
+    text: str = Field(min_length=1)
+    quote: str = Field(min_length=1)
     importance: Literal["required", "preferred", "responsibility", "eligibility"]
     criteria: list[RequirementCriterion] = Field(default_factory=list)
 
@@ -80,7 +83,7 @@ class CriterionMatch(StrictModel):
     criterion_id: str
     status: MatchStatus
     evidence_ids: list[str]
-    explanation: str = Field(min_length=1, pattern=r"\S")
+    explanation: str = Field(min_length=1)
 
 
 class RequirementMatch(StrictModel):
@@ -88,7 +91,7 @@ class RequirementMatch(StrictModel):
     status: MatchStatus
     evidence_ids: list[str]
     inspected_evidence_ids: list[str] = Field(default_factory=list)
-    explanation: str = Field(min_length=1, pattern=r"\S")
+    explanation: str = Field(min_length=1)
     criteria_matches: list[CriterionMatch] = Field(default_factory=list)
     rule_adjustments: list[str] = Field(default_factory=list)
 
@@ -116,7 +119,7 @@ class DraftSentence(StrictModel):
     id: str
     target_id: str
     source_ids: list[str] = Field(min_length=1)
-    text: str = Field(min_length=1, pattern=r"\S")
+    text: str = Field(min_length=1)
 
 
 class Draft(StrictModel):
@@ -132,7 +135,7 @@ class SummaryDraft(StrictModel):
 class SentenceVerdict(StrictModel):
     id: str
     status: Literal["supported", "unsupported", "unclear"]
-    reason: str = Field(min_length=1, pattern=r"\S")
+    reason: str = Field(min_length=1)
 
 
 class Review(StrictModel):
@@ -202,25 +205,29 @@ def request(
     constrained = (
         llm.bind(format=json_schema)
         if json_schema is not None
+        and (not isinstance(llm, ChatOllama) or supports_structured_output(llm.model))
         else structured_llm(llm, schema)
     )
-    with measure_model_call(stage):
-        response = (prompt | constrained | StrOutputParser()).invoke(
-            {"data": json.dumps(data, ensure_ascii=True)}
-        )
-    if transform_response is not None:
-        response = transform_response(response)
-    try:
-        return schema.model_validate_json(response)
-    except ValidationError as exc:
-        raise ModelOutputError(
-            f"The language model returned invalid {schema.__name__} JSON: "
-            + "; ".join(
-                f"{'.'.join(map(str, error['loc'])) or '$'}: {error['msg']}"
-                for error in exc.errors(include_url=False, include_input=False)
-            ),
-            response,
-        ) from exc
+    max_retries = 1 if os.environ.get("DISABLE_RETRIES") == "1" else 2
+    for i in range(max_retries):
+        try:
+            with measure_model_call(stage):
+                response = (prompt | constrained | StrOutputParser()).invoke(
+                    {"data": json.dumps(data, ensure_ascii=True)}
+                )
+            if transform_response is not None:
+                response = transform_response(response)
+            return schema.model_validate_json(response)
+        except ValidationError as exc:
+            if i == max_retries - 1:
+                raise ModelOutputError(
+                    f"The language model returned invalid {schema.__name__} JSON: "
+                    + "; ".join(
+                        f"{'.'.join(map(str, error['loc'])) or '$'}: {error['msg']}"
+                        for error in exc.errors(include_url=False, include_input=False)
+                    ),
+                    response,
+                ) from exc
 
 
 def source_evidence(cv: CV) -> list[EvidenceItem]:

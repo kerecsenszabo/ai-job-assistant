@@ -25,13 +25,10 @@ DEFAULT_DATABASE = Path("output/benchmarks.sqlite")
 DEFAULT_JOB_CACHE = Path("output/job-requirements")
 MAX_OUTPUT_TOKENS = 4096
 MODEL_SUITE = (
-    ("qwen3.5:0.8b", "1.0 GB", "basic"),
-    ("lfm2.5-thinking:1.2b", "731 MB", "basic challenger"),
-    ("granite4.2:3b", "2.2 GB", "baseline"),
-    ("qwen3.5:2b-q4_K_M", "1.9 GB", "challenger"),
-    ("openbmb/minicpm5-2b:2b", "1.6 GB", "priority challenger"),
-    ("nemotron-3-nano:4b", "2.8 GB", "challenger"),
-    ("gemma4:e2b-it-qat", "4.3 GB", "current winner"),
+    ("qwen3.5:2b", "TBD", "challenger"),
+    ("qwen3.5:4b", "TBD", "challenger"),
+    ("granite4.1:3b", "TBD", "baseline"),
+    ("granite4.2:3b", "TBD", "baseline"),
 )
 
 
@@ -265,7 +262,16 @@ def run_benchmark(args: argparse.Namespace) -> None:
         raise SystemExit(
             f"Job descriptions given more than once: {', '.join(duplicates)}"
         )
-    models = args.models or [model for model, _, _ in MODEL_SUITE]
+    suite_models = [model for model, _, _ in MODEL_SUITE]
+    if args.models:
+        models = []
+        for model in args.models:
+            if model == "suite":
+                models.extend(suite_models)
+            else:
+                models.append(model)
+    else:
+        models = suite_models
     available = installed_model_info()
     missing = [model for model in models if model not in available]
     if missing and not args.pull:
@@ -287,9 +293,13 @@ def run_benchmark(args: argparse.Namespace) -> None:
             CONTEXT_TOKENS,
         ),
     )
+    models_to_insert = []
+    for model in models:
+        model_info = available.get(model, ("unknown", "unknown"))
+        models_to_insert.append((run_id, model, model_info[0], model_info[1]))
     connection.executemany(
         "INSERT INTO benchmark_models VALUES (?, ?, ?, ?)",
-        [(run_id, model, available[model][0], available[model][1]) for model in models],
+        models_to_insert,
     )
     connection.commit()
     cv = load_cv(args.cv, model=models[0])

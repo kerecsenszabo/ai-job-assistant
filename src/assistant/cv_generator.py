@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 MODEL = "gemma4:e2b-it-qat"
 # Source CV + job description + full JSON reply exceeds Ollama's default window.
+MODELS_WITHOUT_STRUCTURED_OUTPUT = {"qwen3.5:2b", "qwen3.5:4b"}
 CONTEXT_TOKENS = 20000
 # Models that answer with an empty string when reasoning is switched off.
 REASONING_REQUIRED = ("gpt-oss",)
@@ -31,6 +32,10 @@ MAX_SKILLS = 14
 MAX_AI_NATIVE = 4
 MAX_BULLETS = 6
 CONTEXT_BULLETS = 2
+
+
+def supports_structured_output(model_name: str) -> bool:
+    return model_name not in MODELS_WITHOUT_STRUCTURED_OUTPUT
 
 
 @dataclass(frozen=True)
@@ -76,6 +81,8 @@ def local_llm(model: str, *, num_predict: int | None = None) -> ChatOllama:
 
 def structured_llm(llm: Runnable, schema: type[BaseModel]) -> Runnable:
     """Constrain an Ollama request to the JSON schema for *schema*."""
+    if isinstance(llm, ChatOllama) and not supports_structured_output(llm.model):
+        return llm
     return llm.bind(format=schema.model_json_schema())
 
 
@@ -150,8 +157,8 @@ class Certification(BaseModel):
 class Language(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(min_length=1, pattern=r"\S")
-    proficiency: str = Field(min_length=1, pattern=r"\S")
+    name: str = Field(min_length=1, pattern=r"^[^\s]+$")
+    proficiency: str = Field(min_length=1, pattern=r"^[^\s]+$")
 
 
 class CV(BaseModel):
@@ -310,6 +317,7 @@ def tailor_cv(
         matching_cache=matching_cache,
         refresh_matching=refresh_matching,
         model_identity=model_identity,
+        model_name=model,
     )
     if diagnostics is None:
         for warning in report.warnings:

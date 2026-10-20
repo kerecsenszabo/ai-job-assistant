@@ -466,6 +466,7 @@ def test_tailor_cv_passes_optional_cache_settings(tmp_path, monkeypatch, opt_in)
                 "matching_cache": None,
                 "refresh_matching": False,
                 "model_identity": None,
+                "model_name": "gemma4:e2b-it-qat",
             },
         )
     ]

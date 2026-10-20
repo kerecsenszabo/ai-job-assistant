@@ -63,7 +63,7 @@ def summary_voice_rejection(original: str, proposed: str) -> str:
 def rewrite_schema(
     targets: list[EvidenceItem], summary_ids: list[str], summary: bool
 ) -> dict:
-    text = {"type": "string", "minLength": 1, "pattern": r"\S"}
+    text = {"type": "string", "minLength": 1}
     bullets = {}
     for target in targets:
         bullets[target.id] = {
@@ -127,7 +127,7 @@ def rewrite_review_schema(ids: list[str]) -> dict:
                 "type": "string",
                 "enum": ["supported", "unsupported", "unclear"],
             },
-            "reason": {"type": "string", "minLength": 1, "pattern": r"\S"},
+            "reason": {"type": "string", "minLength": 1, "pattern": r"^[^\s]+$"},
         },
     }
     return {
