@@ -95,7 +95,7 @@ def get_parsed_job(
                 parsed = ParsedJob.model_validate(record.parsed_job, strict=True)
             except (ValidationError, ValueError) as exc:
                 raise ValueError(
-                    f"Invalid or stale job analysis cache {cache_path}; "
+                    f"Invalid or stale job analysis cache {cache_path} ({exc}); "
                     "rerun with --refresh-job-analysis to replace it."
                 ) from exc
             return parsed, fingerprint, True

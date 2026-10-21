@@ -203,67 +203,79 @@ def rewrite(
         audits.append(entry)
         return entry
 
-    try:
-        draft = request(
-            llm,
-            Draft,
-            "Rewrite every selected work-experience bullet into clear, concise, "
-            "professional CV language, rather than merely selecting, reordering, "
-            "or copying the source bullets. Use direct action verbs, remove wordiness, "
-            "and improve sentence structure while preserving every factual detail. "
-            "Highlight outcomes only when the original bullet states them; never "
-            "invent impact or metrics to make a bullet sound stronger. Keep the "
-            "original wording only when no safe wording improvement is possible. "
-            + (
-                "Emphasize facts relevant to the job without adding its requirements "
-                "as candidate experience. "
-                if description is not None
-                else "Use general-purpose wording without targeting a particular job. "
+    batch_size = 5
+    batches = [targets[i:i+batch_size] for i in range(0, len(targets), batch_size)]
+    final_draft = Draft(bullets={}, summary_sentences=[])
+    draft = None
+
+    for i, batch in enumerate(batches):
+        data["bullet_targets"] = [item.model_dump() for item in batch]
+        try:
+            batch_draft = request(
+                llm,
+                Draft,
+                "Rewrite every selected work-experience bullet into clear, concise, "
+                "professional CV language, rather than merely selecting, reordering, "
+                "or copying the source bullets. Use direct action verbs, remove wordiness, "
+                "and improve sentence structure while preserving every factual detail. "
+                "Highlight outcomes only when the original bullet states them; never "
+                "invent impact or metrics to make a bullet sound stronger. Keep the "
+                "original wording only when no safe wording improvement is possible. "
+                + (
+                    "Emphasize facts relevant to the job without adding its requirements "
+                    "as candidate experience. "
+                    if description is not None
+                    else "Use general-purpose wording without targeting a particular job. "
+                )
+                + "Return bullets as an object keyed by EXACT bullet evidence IDs, with "
+                "source_ids containing only that same ID and text. Never combine "
+                "different bullets/projects, borrow skills from other evidence, remove "
+                "client prefixes, or change ownership, scale, tools, numbers or qualifiers. "
+                "Each entry text may contain multiple sentences. "
+                + (
+                    "Also propose up to four concise summary_sentences entries, each "
+                    "with a unique id from summary/0 through summary/3, text, and "
+                    "source_ids from summary_evidence. All "
+                    "claims must be fully supported by those citations; do not infer "
+                    "leadership, experience duration, expertise or production deployment. "
+                    "Preserve the original summary voice. If it already fits the role, "
+                    "make only a subtle, useful change or keep it; otherwise rewrite "
+                    "it to emphasize supported, relevant strengths. Do not insert job "
+                    "keywords without citing candidate evidence for each claim. "
+                    "Never mention the hiring company."
+                    if description is not None and i == 0
+                    else "Return an empty summary_sentences list."
+                ),
+                data,
+                json_schema=rewrite_schema(
+                    batch,
+                    sorted({item["id"] for item in data["summary_evidence"]}),
+                    description is not None,
+                ),
+                transform_response=lambda response: capture_rewrite_response(
+                    raw_draft, response
+                ),
+                stage="rewriting",
             )
-            + "Return bullets as an object keyed by EXACT bullet evidence IDs, with "
-            "source_ids containing only that same ID and text. Never combine "
-            "different bullets/projects, borrow skills from other evidence, remove "
-            "client prefixes, or change ownership, scale, tools, numbers or qualifiers. "
-            "Each entry text may contain multiple sentences. "
-            + (
-                "Also propose up to four concise summary_sentences entries, each "
-                "with a unique id from summary/0 through summary/3, text, and "
-                "source_ids from summary_evidence. All "
-                "claims must be fully supported by those citations; do not infer "
-                "leadership, experience duration, expertise or production deployment. "
-                "Preserve the original summary voice. If it already fits the role, "
-                "make only a subtle, useful change or keep it; otherwise rewrite "
-                "it to emphasize supported, relevant strengths. Do not insert job "
-                "keywords without citing candidate evidence for each claim. "
-                "Never mention the hiring company."
-                if description is not None
-                else "Return an empty summary_sentences list."
-            ),
-            data,
-            json_schema=rewrite_schema(
-                targets,
-                sorted({item["id"] for item in data["summary_evidence"]}),
-                description is not None,
-            ),
-            transform_response=lambda response: capture_rewrite_response(
-                raw_draft, response
-            ),
-            stage="rewriting",
-        )
-    except ModelOutputError as exc:
-        report.invalid_rewrite_response = raw_draft[-1] if raw_draft else exc.response
-        problems.append(f"Invalid rewrite response: {exc}")
-        for item in targets:
-            record_audit(item.id, [item.id], "", "unclear", problems[-1])
-        if description is not None:
-            record_audit(
-                "summary",
-                ["summary/0"] if cv.summary else [],
-                "",
-                "unclear",
-                problems[-1],
-            )
-        draft = None
+            final_draft.bullets.update(batch_draft.bullets)
+            if i == 0:
+                final_draft.summary_sentences = batch_draft.summary_sentences
+            draft = final_draft
+        except ModelOutputError as exc:
+            report.invalid_rewrite_response = raw_draft[-1] if raw_draft else exc.response
+            problems.append(f"Invalid rewrite response: {exc}")
+            for item in targets:
+                record_audit(item.id, [item.id], "", "unclear", problems[-1])
+            if description is not None:
+                record_audit(
+                    "summary",
+                    ["summary/0"] if cv.summary else [],
+                    "",
+                    "unclear",
+                    problems[-1],
+                )
+            draft = None
+            break
 
     if draft is not None:
         entries = [

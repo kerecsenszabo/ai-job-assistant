@@ -75,7 +75,7 @@ def local_llm(model: str, *, num_predict: int | None = None) -> ChatOllama:
         reasoning=None if model.startswith(REASONING_REQUIRED) else False,
         temperature=0,
         num_ctx=CONTEXT_TOKENS,
-        num_predict=num_predict,
+        num_predict=num_predict or 4096,
     )
 
 

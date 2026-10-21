@@ -120,6 +120,8 @@ once, outside the measured tailoring cases. Match coverage is not a model-qualit
 score or a hiring probability. Without `--models`, the runner compares the
 curated suite shown by `benchmark models`; `--pull` downloads missing models.
 Benchmark responses are capped at 4096 tokens (generation and chat are not).
+If a stale cache error occurs, use `--refresh-job-analysis` or manually
+delete the offending file in `output/job-requirements/`.
 
 Historical benchmark databases are not migrated; use `--database` with a new
 file if an existing database has an unsupported schema. The previous

@@ -376,6 +376,13 @@ def unkey_semantic_decisions(
                 raise ModelOutputError(
                     "Semantic evidence IDs must be strings.", response
                 )
+            if not all(
+                source_id in (evidence_aliases or {}).keys()
+                for source_id in decision["evidence_ids"]
+            ):
+                raise ModelOutputError(
+                    "Semantic evidence IDs must be short aliases (e0, e1, ...).", response
+                )
             decision["evidence_ids"] = [
                 (evidence_aliases or {}).get(source_id, source_id)
                 for source_id in decision["evidence_ids"]
@@ -462,7 +469,12 @@ def semantic_decisions(
         "alone do not establish CI/CD. Role dates support role tenure, not years "
         "using a specific tool. Never treat the job quote as candidate evidence. "
         "Return decisions keyed by the short criterion ID (c0, c1, ...). "
-        "Cite only listed short evidence IDs (e0, e1, ...). No duplicate IDs. "
+        "Cite ONLY the provided short evidence IDs (e0, e1, ...). "
+        "Using full IDs like 'experience/0' is strictly forbidden and will cause failure. "
+        "You MUST only cite the provided short evidence IDs (e0, e1, ...). "
+        "Example: if the evidence object lists 'e0' for a skill, cite it as 'e0'. "
+        "Do NOT use IDs not present as keys in the evidence object. "
+        "No duplicate IDs. "
         "Use concise explanations of at most 160 characters."
     )
 
@@ -499,7 +511,8 @@ def semantic_decisions(
                     ):
                         raise ModelOutputError(
                             f"Semantic decision {decision.criterion_id} ({decision.status}) "
-                            f"has invalid source citations: {decision.evidence_ids}."
+                            f"has invalid source citations: {decision.evidence_ids}. "
+                            f"Allowed for {decision.criterion_id}: {sorted(allowed)}."
                         )
                     ids = list(dict.fromkeys(decision.evidence_ids))
                     explanation = decision.explanation

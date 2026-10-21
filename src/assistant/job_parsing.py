@@ -514,7 +514,7 @@ def recover_unquoted_options(
     return requirement.model_copy(update={"criteria": criteria}), [warning + "."]
 
 
-def job_description_chunks(description: str, max_chars: int = 800) -> list[str]:
+def job_description_chunks(description: str, max_chars: int = 400) -> list[str]:
     """Bound extraction output by splitting at source line or word boundaries."""
     description = description.strip()
     if len(description) <= max_chars:
@@ -558,23 +558,28 @@ def source_requirement_quotes(
     """Resolve compact source keys to quotes without asking the model to copy them."""
     try:
         job = json.loads(response)
-    except json.JSONDecodeError:
-        return response
+    except json.JSONDecodeError as exc:
+        raise ModelOutputError(f"Invalid JSON: {exc}", response) from exc
     if not isinstance(job, dict):
-        return response
+        raise ModelOutputError("Response must be a JSON object.", response)
     requirements = job.get("requirements")
+    if requirements is None:
+        requirements = {}
     if not isinstance(requirements, dict):
-        return response
+        raise ModelOutputError(
+            f"Requirements must be an object, got {type(requirements).__name__}.",
+            response,
+        )
     resolved = []
     for source_id, requirement in requirements.items():
         if source_id not in sources:
-            return response
+            raise ModelOutputError(f"Unknown source ID: {source_id}", response)
         if requirement is None:
             if skipped is not None:
                 skipped.add(source_id)
             continue
         if not isinstance(requirement, dict):
-            return response
+            raise ModelOutputError(f"Requirement must be an object: {source_id}", response)
         requirement["id"] = source_id
         requirement["quote"] = sources[source_id]
         requirement.setdefault("text", sources[source_id])
@@ -728,7 +733,8 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
         "Use operator=any for 'A or B', all for 'A and B'. "
         "Keep text concise. Do not repeat requirements or criteria. "
         "Options must be exact substrings of the source line. "
-        "If no assessable requirements, return an empty object."
+        "If no assessable requirements, return an empty object. "
+        "Ensure the output is a complete, well-formed JSON object, do not truncate."
     )
     prepared = prepare_job_description(description)
     sectioned_lines = set()
