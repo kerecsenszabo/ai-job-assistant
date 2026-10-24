@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 if TYPE_CHECKING:
     from assistant.cv_tailoring import TailoringReport
 
-MODEL = "gemma4:e2b-it-qat"
+MODEL = "granite4.2:3b"
 # Source CV + job description + full JSON reply exceeds Ollama's default window.
 MODELS_WITHOUT_STRUCTURED_OUTPUT = {"qwen3.5:2b", "qwen3.5:4b"}
 CONTEXT_TOKENS = 20000

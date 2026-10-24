@@ -101,7 +101,7 @@ Run `uv run job-assistant generate --help` for all options.
 
 | Option | Purpose |
 |---|---|
-| `--model NAME` | Choose an installed Ollama model; default `gemma4:e2b-it-qat` |
+| `--model NAME` | Choose an installed Ollama model; default `granite4.2:3b` |
 | `--paper-size {a4,letter}` | PDF page size; default A4 |
 | `--font-size {10,11,12}` | Base LaTeX font size in points; default 12 |
 | `--margin-cm CM` | Uniform page margins from 0.5 to 5 cm; default 1.6 |

@@ -207,10 +207,47 @@ def rewrite(
     batches = [targets[i:i+batch_size] for i in range(0, len(targets), batch_size)]
     final_draft = Draft(bullets={}, summary_sentences=[])
     draft = None
+    granite42_first_person_summary = (
+        getattr(llm, "model", None) == "granite4.2:3b"
+        and description is not None
+        and FIRST_PERSON.search(cv.summary)
+    )
 
     for i, batch in enumerate(batches):
         data["bullet_targets"] = [item.model_dump() for item in batch]
         try:
+            draft_schema = rewrite_schema(
+                batch,
+                sorted({item["id"] for item in data["summary_evidence"]}),
+                description is not None,
+            )
+            if granite42_first_person_summary and i == 0:
+                summary_schema = draft_schema["properties"]["summary_sentences"]
+                summary_schema["maxItems"] = 1
+                summary_schema["items"]["properties"]["text"]["pattern"] = (
+                    r"^(I |My )"
+                )
+            summary_instruction = "Return an empty summary_sentences list."
+            if description is not None and i == 0:
+                summary_instruction = (
+                    "Also propose up to four concise summary_sentences entries, each "
+                    "with a unique id from summary/0 through summary/3, text, and "
+                    "source_ids from summary_evidence. All claims must be fully "
+                    "supported by those citations; do not infer leadership, experience "
+                    "duration, expertise or production deployment. Preserve the "
+                    "original summary voice. If it already fits the role, make only a "
+                    "subtle, useful change or keep it; otherwise emphasize supported, "
+                    "relevant strengths. Do not insert job keywords without citing "
+                    "candidate evidence for each claim. Never mention the hiring "
+                    "company."
+                )
+                if granite42_first_person_summary:
+                    summary_instruction += (
+                        " Propose exactly one complete first-person sentence beginning "
+                        "with 'I ' or 'My '. Cite sources that explicitly support every "
+                        "named tool or practice; job-description wording is context, "
+                        "never evidence."
+                    )
             batch_draft = request(
                 llm,
                 Draft,
@@ -232,26 +269,9 @@ def rewrite(
                 "different bullets/projects, borrow skills from other evidence, remove "
                 "client prefixes, or change ownership, scale, tools, numbers or qualifiers. "
                 "Each entry text may contain multiple sentences. "
-                + (
-                    "Also propose up to four concise summary_sentences entries, each "
-                    "with a unique id from summary/0 through summary/3, text, and "
-                    "source_ids from summary_evidence. All "
-                    "claims must be fully supported by those citations; do not infer "
-                    "leadership, experience duration, expertise or production deployment. "
-                    "Preserve the original summary voice. If it already fits the role, "
-                    "make only a subtle, useful change or keep it; otherwise rewrite "
-                    "it to emphasize supported, relevant strengths. Do not insert job "
-                    "keywords without citing candidate evidence for each claim. "
-                    "Never mention the hiring company."
-                    if description is not None and i == 0
-                    else "Return an empty summary_sentences list."
-                ),
+                + summary_instruction,
                 data,
-                json_schema=rewrite_schema(
-                    batch,
-                    sorted({item["id"] for item in data["summary_evidence"]}),
-                    description is not None,
-                ),
+                json_schema=draft_schema,
                 transform_response=lambda response: capture_rewrite_response(
                     raw_draft, response
                 ),
