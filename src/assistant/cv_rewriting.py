@@ -93,7 +93,7 @@ def rewrite_schema(
             },
             "summary_sentences": {
                 "type": "array",
-                "maxItems": 4 if summary else 0,
+                "maxItems": 6 if summary else 0,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
@@ -101,7 +101,7 @@ def rewrite_schema(
                     "properties": {
                         "id": {
                             "type": "string",
-                            "enum": [f"summary/{i}" for i in range(4)],
+                            "enum": [f"summary/{i}" for i in range(6)],
                         },
                         "source_ids": {
                             "type": "array",
@@ -223,28 +223,30 @@ def rewrite(
             )
             if granite42_first_person_summary and i == 0:
                 summary_schema = draft_schema["properties"]["summary_sentences"]
-                summary_schema["maxItems"] = 3
+                summary_schema["maxItems"] = 6
                 summary_schema["items"]["properties"]["text"]["pattern"] = r"^(I |My )"
             summary_instruction = "Return an empty summary_sentences list."
             if description is not None and i == 0:
                 summary_instruction = (
-                    "Also propose up to four concise summary_sentences entries, each "
-                    "with a unique id from summary/0 through summary/3, text, and "
+                    "Also propose up to six summary_sentences entries, each "
+                    "with a unique id from summary/0 through summary/5, text, and "
                     "source_ids from summary_evidence. All claims must be fully "
                     "supported by those citations; do not infer leadership, experience "
                     "duration, expertise or production deployment. Preserve the "
-                    "original summary voice. If it already fits the role, make only a "
-                    "subtle, useful change or keep it; otherwise emphasize supported, "
-                    "relevant strengths. Do not insert job keywords without citing "
-                    "candidate evidence for each claim. Never mention the hiring "
-                    "company."
+                    "depth, scope, and completeness of the original summary; do not "
+                    "truncate or over-condense it. Preserve the original summary voice. "
+                    "If it already fits the role, make only subtle, useful refinements "
+                    "or keep it; otherwise emphasize supported, relevant strengths "
+                    "while maintaining comprehensive coverage of the candidate's background. "
+                    "Do not insert job keywords without citing candidate evidence for each claim. "
+                    "Never mention the hiring company."
                 )
                 if granite42_first_person_summary:
                     summary_instruction += (
-                        " Propose concise first-person summary sentences (each beginning "
-                        "with 'I ' or 'My '). Cite sources that explicitly support every "
-                        "named tool or practice; job-description wording is context, "
-                        "never evidence."
+                        " Preserve key points from the source summary in first-person "
+                        "sentences (each beginning with 'I ' or 'My '). Cite sources that "
+                        "explicitly support every named tool or practice; job-description "
+                        "wording is context, never evidence."
                     )
             batch_draft = request(
                 llm,
@@ -346,9 +348,9 @@ def rewrite(
         allowed = {item.id for item in targets}
         for target in grouped.keys() - allowed - {"summary"}:
             problems.append(f"Unexpected rewrite target: {target}.")
-        if len(grouped.get("summary", [])) > 4:
+        if len(grouped.get("summary", [])) > 6:
             summary_invalid = True
-            problems.append("The proposed summary exceeds four sentences.")
+            problems.append("The proposed summary exceeds six sentences.")
 
         for target in [item.id for item in targets] + (
             ["summary"] if "summary" in grouped else []
@@ -586,7 +588,7 @@ def rewrite(
                         "summary_sentences"
                     ],
                     "minItems": 1,
-                    "maxItems": 1,
+                    "maxItems": 6,
                 },
             },
         }
@@ -602,14 +604,15 @@ def rewrite(
                 llm,
                 SummaryDraft,
                 "The previous proposed summary was not fully supported or was missing. "
-                "Propose ONE concise summary sentence with id summary/0, citing only "
-                "the supplied candidate evidence. The job is context, not evidence. "
+                "Propose supported summary sentences (with IDs summary/0 through summary/5), "
+                "citing only the supplied candidate evidence. Do not over-condense or truncate "
+                "the summary. The job is context, not evidence. "
                 "Do not include digits, numerical claims, years of experience, "
                 "production use, ownership or uncited tools. "
-                "Preserve the original summary's first-person voice. "
-                "If the original summary is already strong, make a subtle supported "
-                "refinement or retain its wording; otherwise highlight the most "
-                "relevant supported strength. Address the prior failure without "
+                "Preserve the original summary's voice, depth, and coverage. "
+                "If the original summary is already strong, make subtle supported "
+                "refineries or retain its wording; otherwise highlight the most "
+                "relevant supported strengths. Address the prior failure without "
                 "copying unsupported claims.",
                 {
                     "job_description": description,
@@ -627,100 +630,132 @@ def rewrite(
                 ),
                 stage="rewriting",
             )
-            if len(retry.summary_sentences) != 1:
-                raise ModelOutputError("Summary retry must contain one sentence.")
-            value = retry.summary_sentences[0]
-            sentence = DraftSentence.model_validate(
-                {**value, "target_id": "summary"} if isinstance(value, dict) else value
-            )
-            if (
-                sentence.id != "summary/0"
-                or not set(sentence.source_ids) <= summary_sources
-                or len(sentence.source_ids) != len(set(sentence.source_ids))
-            ):
-                raise ModelOutputError("Summary retry has invalid evidence citations.")
-            rejection = summary_voice_rejection(
-                cv.summary, sentence.text
-            ) or mechanical_rejection(
-                sentence, [originals[sid] for sid in sentence.source_ids]
-            )
-            if rejection:
-                retry_audits.append(
-                    record_audit(
-                        "summary",
-                        sentence.source_ids,
-                        sentence.text,
-                        "rejected",
-                        rejection,
-                    )
+            if not retry.summary_sentences or len(retry.summary_sentences) > 6:
+                raise ModelOutputError(
+                    "Summary retry must contain between 1 and 6 sentences."
                 )
-            elif sentence.text == cv.summary and sentence.source_ids == ["summary/0"]:
-                retry_audits.append(
-                    record_audit(
-                        "summary",
-                        sentence.source_ids,
-                        sentence.text,
-                        "accepted",
-                        "Unchanged source.",
-                    )
+            retry_sentences = []
+            for s_idx, value in enumerate(retry.summary_sentences):
+                sentence = DraftSentence.model_validate(
+                    {**value, "target_id": "summary"}
+                    if isinstance(value, dict)
+                    else value
                 )
+                if (
+                    sentence.id != f"summary/{s_idx}"
+                    or not set(sentence.source_ids) <= summary_sources
+                    or len(sentence.source_ids) != len(set(sentence.source_ids))
+                ):
+                    raise ModelOutputError(
+                        "Summary retry has invalid evidence citations."
+                    )
+                retry_sentences.append(sentence)
+
+            full_retry_text = " ".join(s.text for s in retry_sentences)
+            voice_rej = summary_voice_rejection(cv.summary, full_retry_text)
+            if voice_rej:
+                for sentence in retry_sentences:
+                    retry_audits.append(
+                        record_audit(
+                            "summary",
+                            sentence.source_ids,
+                            sentence.text,
+                            "rejected",
+                            voice_rej,
+                        )
+                    )
             else:
-                retry_review_started = True
-                review = request(
-                    llm,
-                    Review,
-                    "Independently check EVERY claim in this summary against ONLY "
-                    "its cited candidate evidence. Supported requires every claim "
-                    "to be explicitly entailed; reject altered or invented facts.",
-                    {
-                        "entries": [
-                            {
-                                "sentence": sentence.model_dump(),
-                                "sources": [
-                                    originals[sid].model_dump()
-                                    for sid in sentence.source_ids
-                                ],
-                            }
-                        ]
-                    },
-                    json_schema=rewrite_review_schema([sentence.id]),
-                    transform_response=lambda response: capture_rewrite_response(
-                        raw_review, response
-                    ),
-                    stage="rewrite_review",
-                )
-                if set(review.verdicts) != {sentence.id}:
-                    raise ModelOutputError(
-                        "Summary retry review must cover exactly one sentence."
+                mech_rejs = [
+                    mechanical_rejection(s, [originals[sid] for sid in s.source_ids])
+                    for s in retry_sentences
+                ]
+                if any(mech_rejs):
+                    for sentence, rej in zip(retry_sentences, mech_rejs):
+                        retry_audits.append(
+                            record_audit(
+                                "summary",
+                                sentence.source_ids,
+                                sentence.text,
+                                "rejected" if rej else "unclear",
+                                rej or "Another retry sentence was rejected.",
+                            )
+                        )
+                elif full_retry_text == cv.summary and all(
+                    s.source_ids == ["summary/0"] for s in retry_sentences
+                ):
+                    for sentence in retry_sentences:
+                        retry_audits.append(
+                            record_audit(
+                                "summary",
+                                sentence.source_ids,
+                                sentence.text,
+                                "accepted",
+                                "Unchanged source.",
+                            )
+                        )
+                else:
+                    retry_review_started = True
+                    review = request(
+                        llm,
+                        Review,
+                        "Independently check EVERY claim in this summary against ONLY "
+                        "its cited candidate evidence. Supported requires every claim "
+                        "to be explicitly entailed; reject altered or invented facts.",
+                        {
+                            "entries": [
+                                {
+                                    "sentence": sentence.model_dump(),
+                                    "sources": [
+                                        originals[sid].model_dump()
+                                        for sid in sentence.source_ids
+                                    ],
+                                }
+                                for sentence in retry_sentences
+                            ]
+                        },
+                        json_schema=rewrite_review_schema(
+                            [s.id for s in retry_sentences]
+                        ),
+                        transform_response=lambda response: capture_rewrite_response(
+                            raw_review, response
+                        ),
+                        stage="rewrite_review",
                     )
-                value = review.verdicts[sentence.id]
-                if not isinstance(value, dict):
-                    raise ModelOutputError(
-                        "Summary retry review has an invalid verdict."
-                    )
-                verdict = SentenceVerdict.model_validate({**value, "id": sentence.id})
-                status = {
-                    "supported": "accepted",
-                    "unsupported": "rejected",
-                    "unclear": "unclear",
-                }[verdict.status]
-                retry_audits.append(
-                    record_audit(
-                        "summary",
-                        sentence.source_ids,
-                        sentence.text,
-                        status,
-                        verdict.reason,
-                    )
-                )
+                    if set(review.verdicts) != {s.id for s in retry_sentences}:
+                        raise ModelOutputError(
+                            "Summary retry review must cover all proposed summary sentences."
+                        )
+                    for sentence in retry_sentences:
+                        value = review.verdicts[sentence.id]
+                        if not isinstance(value, dict):
+                            raise ModelOutputError(
+                                "Summary retry review has an invalid verdict."
+                            )
+                        verdict = SentenceVerdict.model_validate(
+                            {**value, "id": sentence.id}
+                        )
+                        status = {
+                            "supported": "accepted",
+                            "unsupported": "rejected",
+                            "unclear": "unclear",
+                        }[verdict.status]
+                        retry_audits.append(
+                            record_audit(
+                                "summary",
+                                sentence.source_ids,
+                                sentence.text,
+                                status,
+                                verdict.reason,
+                            )
+                        )
         except (ModelOutputError, ValidationError) as exc:
             if retry_review_started and raw_review:
                 report.invalid_review_response = raw_review[-1]
             elif retry_raw:
                 report.invalid_rewrite_response = retry_raw[-1]
             problems.append(f"Summary retry failed: {exc}")
-        if retry_audits and retry_audits[0].status == "accepted":
-            summaries = [sentence]
+        if retry_audits and all(a.status == "accepted" for a in retry_audits):
+            summaries = retry_sentences
             accepted_summary = True
             for audit in audits:
                 if (

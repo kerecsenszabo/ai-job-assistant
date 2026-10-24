@@ -225,7 +225,7 @@ def test_dynamic_schemas_require_exact_targets_and_citations(setup):
         assert sources["maxItems"] == 1
         assert sources["items"]["enum"] == [sid]
     summaries = schema["properties"]["summary_sentences"]
-    assert summaries["maxItems"] == 4
+    assert summaries["maxItems"] == 6
     assert set(summaries["items"]["properties"]["source_ids"]["items"]["enum"]) == {
         *IDS,
         "summary/0",
@@ -370,7 +370,7 @@ def test_mechanically_rejected_summary_gets_focused_retry(setup):
         "rejected",
         "accepted",
     ]
-    assert calls[1][1]["format"]["properties"]["summary_sentences"]["maxItems"] == 1
+    assert calls[1][1]["format"]["properties"]["summary_sentences"]["maxItems"] == 6
     assert (
         calls[1][1]["format"]["properties"]["summary_sentences"]["items"]["properties"][
             "text"
@@ -601,5 +601,5 @@ def test_granite42_first_person_summary_supports_multi_sentence(setup):
     rewrite(cv, llm, report, selected, "Python role", diagnostics)
     schema = calls[0][1]["format"]
     summaries = schema["properties"]["summary_sentences"]
-    assert summaries["maxItems"] == 3
+    assert summaries["maxItems"] == 6
     assert summaries["items"]["properties"]["text"]["pattern"] == r"^(I |My )"

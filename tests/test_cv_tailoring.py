@@ -234,8 +234,8 @@ def test_pipeline_rewrites_supported_facts_and_keeps_source_immutable(cv):
     result, report = tailor_with_report(
         cv, "Python required; Kubernetes preferred.", llm, diagnostics
     )
-    assert result.skills == ["Python"]
-    assert result.ai_native == []
+    assert result.skills == ["Python", "SQL", "AWS"]
+    assert result.ai_native == ["Reviewed AI-assisted code."]
     assert result.experience[0].bullets == [
         "Maintained reports.",
         "Developed Python ETL pipelines.",
@@ -245,6 +245,9 @@ def test_pipeline_rewrites_supported_facts_and_keeps_source_immutable(cv):
     assert report.match_percent == 75
     assert report.must_have_percent == 100
     assert report.contextual_evidence_ids == [
+        "skills/1",
+        "skills/2",
+        "ai_native/0",
         "experience/0/bullets/0",
         "experience/1/bullets/0",
         "experience/1/bullets/1",
@@ -1426,14 +1429,15 @@ def test_client_context_is_retained_when_anchor_is_not_relevant():
 
 
 def test_selection_caps_skills_and_retains_role_context(cv):
-    cv.skills = [f"Skill {index}" for index in range(20)]
+    cv.skills = [f"Skill {index}" for index in range(25)]
+    cv.ai_native = []
     mapping = matches()
-    mapping[0].evidence_ids = [f"skills/{index}" for index in range(20)]
+    mapping[0].evidence_ids = [f"skills/{index}" for index in range(25)]
     report = TailoringReport(
         evidence=source_evidence(cv), requirements=requirements(), matches=mapping
     )
     selected = select_evidence(report)
-    assert len([item for item in selected if item.section == "skills"]) == 14
+    assert len([item for item in selected if item.section == "skills"]) == 20
     assert len([item for item in selected if item.section == "experience"]) == 4
     assert not any(item.section == "ai_native" for item in selected)
 
@@ -1475,22 +1479,28 @@ def test_selection_prioritizes_matches_then_preserves_context_within_role_budget
         1,
         2,
         3,
+        4,
+        5,
         6,
         7,
     ]
-    assert [item.bullet_index for item in selected if item.role_index == 1] == [0, 1]
+    assert [item.bullet_index for item in selected if item.role_index == 1] == [
+        0,
+        1,
+        2,
+        3,
+    ]
     assert report.contextual_evidence_ids == [
-        *(f"experience/0/bullets/{index}" for index in range(4)),
-        "experience/1/bullets/0",
-        "experience/1/bullets/1",
+        *(f"experience/0/bullets/{index}" for index in range(6)),
+        *(f"experience/1/bullets/{index}" for index in range(4)),
     ]
     assert report.selected_evidence_ids == [item.id for item in selected]
     assert select_evidence(report) == selected
-    assert len(report.contextual_evidence_ids) == 6
+    assert len(report.contextual_evidence_ids) == 10
     assert score_matches(report.requirements, report.matches, report.rubric) == score
 
 
-def test_six_relevant_bullets_survive_instead_of_being_cut_to_four():
+def test_eight_relevant_bullets_survive_instead_of_being_cut_to_four():
     cv = CV(
         name="Example",
         experience=[
@@ -1510,7 +1520,7 @@ def test_six_relevant_bullets_survive_instead_of_being_cut_to_four():
         matches=mapping,
     )
     assert [item.text for item in select_evidence(report)] == cv.experience[0].bullets[
-        :6
+        :8
     ]
     assert report.contextual_evidence_ids == []
 
@@ -2132,7 +2142,7 @@ def test_named_skills_are_kept_when_production_proof_cites_only_work_bullets(cv)
         requirements=[requirement], matches=[proposed], evidence=source_evidence(cv)
     )
     selected = select_evidence(report)
-    assert [item.text for item in selected if item.section == "skills"] == [
+    assert [item.text for item in selected if item.section == "skills"][:2] == [
         "scikit-learn",
         "XGBoost",
     ]

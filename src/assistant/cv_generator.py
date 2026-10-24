@@ -28,10 +28,10 @@ MODELS_WITHOUT_STRUCTURED_OUTPUT = {"qwen3.5:2b", "qwen3.5:4b"}
 CONTEXT_TOKENS = 20000
 # Models that answer with an empty string when reasoning is switched off.
 REASONING_REQUIRED = ("gpt-oss",)
-MAX_SKILLS = 14
-MAX_AI_NATIVE = 4
-MAX_BULLETS = 6
-CONTEXT_BULLETS = 2
+MAX_SKILLS = 20
+MAX_AI_NATIVE = 6
+MAX_BULLETS = 8
+CONTEXT_BULLETS = 4
 
 
 def supports_structured_output(model_name: str) -> bool:

@@ -776,16 +776,17 @@ def select_evidence(report: TailoringReport) -> list[EvidenceItem]:
     selected = []
     limits = {"skills": MAX_SKILLS, "ai_native": MAX_AI_NATIVE}
     for section, limit in limits.items():
-        items = [
-            item
-            for item in report.evidence
-            if item.section == section and relevance.get(item.id, 0) > 0
-        ]
-        selected.extend(
-            sorted(
-                items,
-                key=lambda item: (item.id not in named_skills, -relevance[item.id]),
-            )[:limit]
+        items = [item for item in report.evidence if item.section == section]
+        relevant = [item for item in items if relevance.get(item.id, 0) > 0]
+        ranked = sorted(
+            relevant,
+            key=lambda item: (item.id not in named_skills, -relevance[item.id]),
+        )
+        ranked.extend(item for item in items if relevance.get(item.id, 0) == 0)
+        chosen = ranked[:limit]
+        selected.extend(chosen)
+        report.contextual_evidence_ids.extend(
+            item.id for item in chosen if relevance.get(item.id, 0) == 0
         )
     roles = sorted(
         {item.role_index for item in report.evidence if item.section == "experience"}
