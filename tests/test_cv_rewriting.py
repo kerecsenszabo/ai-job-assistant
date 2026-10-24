@@ -326,10 +326,15 @@ def test_summary_sentences_can_share_first_person_voice(setup):
     draft = proposal(ORIGINALS)
     draft["summary_sentences"] = [
         {"id": "summary/0", "source_ids": [IDS[0]], "text": "I build pipelines."},
-        {"id": "summary/1", "source_ids": [IDS[1]], "text": "SQL reports are my focus."},
+        {
+            "id": "summary/1",
+            "source_ids": [IDS[1]],
+            "text": "SQL reports are my focus.",
+        },
     ]
     result, _, diagnostics, _ = run(
-        setup, [draft, verdicts(["summary/0", "summary/1"])],
+        setup,
+        [draft, verdicts(["summary/0", "summary/1"])],
         description="Python role",
     )
     assert result.summary == "I build pipelines. SQL reports are my focus."
@@ -562,7 +567,9 @@ def test_transport_errors_propagate(setup, stage):
         "We developed Python pipelines.",
     ],
 )
-def test_first_person_experience_bullets_are_mechanically_rejected(setup, first_person_bullet):
+def test_first_person_experience_bullets_are_mechanically_rejected(
+    setup, first_person_bullet
+):
     draft = proposal([first_person_bullet, ORIGINALS[1], ORIGINALS[2]])
     result, report, _, calls = run(setup, [draft])
     assert result.experience[0].bullets == ORIGINALS

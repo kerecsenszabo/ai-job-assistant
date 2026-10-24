@@ -27,14 +27,9 @@ from assistant.cv_tailoring_core import (
     request,
 )
 
-
 NUMBERS = re.compile(r"(?<!\w)\d+(?:[.,]\d+)*(?:%|\+)?")
-FIRST_PERSON = re.compile(
-    r"\b(?:I|[Mm]e|[Mm]y|[Mm]ine|[Ww]e|[Uu]s|[Oo]ur|[Oo]urs)\b"
-)
-FIRST_PERSON_START = re.compile(
-    r"^(?:I|Me|My|Mine|We|Us|Our|Ours)\b", re.IGNORECASE
-)
+FIRST_PERSON = re.compile(r"\b(?:I|[Mm]e|[Mm]y|[Mm]ine|[Ww]e|[Uu]s|[Oo]ur|[Oo]urs)\b")
+FIRST_PERSON_START = re.compile(r"^(?:I|Me|My|Mine|We|Us|Our|Ours)\b", re.IGNORECASE)
 THIRD_PERSON_CANDIDATE = re.compile(r"\bthe (?:candidate|applicant)\b", re.IGNORECASE)
 
 
@@ -209,7 +204,7 @@ def rewrite(
         return entry
 
     batch_size = 5
-    batches = [targets[i:i+batch_size] for i in range(0, len(targets), batch_size)]
+    batches = [targets[i : i + batch_size] for i in range(0, len(targets), batch_size)]
     final_draft = Draft(bullets={}, summary_sentences=[])
     draft = None
     granite42_first_person_summary = (
@@ -229,9 +224,7 @@ def rewrite(
             if granite42_first_person_summary and i == 0:
                 summary_schema = draft_schema["properties"]["summary_sentences"]
                 summary_schema["maxItems"] = 3
-                summary_schema["items"]["properties"]["text"]["pattern"] = (
-                    r"^(I |My )"
-                )
+                summary_schema["items"]["properties"]["text"]["pattern"] = r"^(I |My )"
             summary_instruction = "Return an empty summary_sentences list."
             if description is not None and i == 0:
                 summary_instruction = (
@@ -296,7 +289,9 @@ def rewrite(
                 final_draft.summary_sentences = batch_draft.summary_sentences
             draft = final_draft
         except ModelOutputError as exc:
-            report.invalid_rewrite_response = raw_draft[-1] if raw_draft else exc.response
+            report.invalid_rewrite_response = (
+                raw_draft[-1] if raw_draft else exc.response
+            )
             problems.append(f"Invalid rewrite response: {exc}")
             for item in targets:
                 record_audit(item.id, [item.id], "", "unclear", problems[-1])
@@ -785,4 +780,3 @@ def rewrite(
     if diagnostics is not None:
         diagnostics.summary_fallback = description is not None and not accepted_summary
     return cv.model_copy(update={"experience": experience, "summary": summary})
-

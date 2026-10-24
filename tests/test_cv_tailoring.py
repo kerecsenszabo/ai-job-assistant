@@ -940,7 +940,11 @@ def test_parser_does_not_repeat_existing_general_quote_during_recovery():
                 "importance": "required",
                 "criteria": [
                     {"text": "Rust", "kind": "technology", "options": ["Rust"]},
-                    {"text": "Build Python services.", "kind": "general", "options": []},
+                    {
+                        "text": "Build Python services.",
+                        "kind": "general",
+                        "options": [],
+                    },
                 ],
             }
         }
@@ -952,14 +956,18 @@ def test_parser_does_not_repeat_existing_general_quote_during_recovery():
     assert len(parsed.warnings) == 1
 
 
-@pytest.mark.parametrize(("kind", "option"), [("technology", ""), ("language", "French")])
+@pytest.mark.parametrize(
+    ("kind", "option"), [("technology", ""), ("language", "French")]
+)
 def test_parser_recovers_invalid_option_without_claiming_explicit_match(kind, option):
     source = "Professional working proficiency in English."
     response = {
         "requirements": {
             "source/0": {
                 "importance": "required",
-                "criteria": [{"text": option or "English", "kind": kind, "options": [option]}],
+                "criteria": [
+                    {"text": option or "English", "kind": kind, "options": [option]}
+                ],
             }
         }
     }
@@ -1133,9 +1141,7 @@ def test_linkedin_semicolons_keep_distinct_requirements_and_company_text():
                                     },
                                 ]
                                 if "fluent in English" in quote
-                                else [
-                                    {"text": quote, "kind": "general", "options": []}
-                                ]
+                                else [{"text": quote, "kind": "general", "options": []}]
                             ),
                         }
                     )
@@ -1157,8 +1163,7 @@ def test_linkedin_semicolons_keep_distinct_requirements_and_company_text():
     ] == [("language", ["English"]), ("general", [])]
     assert not parsed.warnings
     assert assessable_job_lines(
-        "Use Spark; Databricks for production. "
-        "You must also mentor others."
+        "Use Spark; Databricks for production. " "You must also mentor others."
     ) == [
         "Use Spark; Databricks for production.",
         "You must also mentor others.",
@@ -1234,9 +1239,7 @@ def test_extraction_schema_bounds_arrays_by_source_size():
     long_quote = "Build " + " and ".join(f"Tool{index}" for index in range(20))
     long_criteria = job_extraction_schema({"source/0": long_quote})["properties"][
         "requirements"
-    ]["properties"]["source/0"]["anyOf"][0]["properties"]["criteria"]["items"][
-        "oneOf"
-    ]
+    ]["properties"]["source/0"]["anyOf"][0]["properties"]["criteria"]["items"]["oneOf"]
     assert long_criteria[1]["properties"]["options"]["maxItems"] == 12
     assert long_criteria[1]["properties"]["options"]["items"]["maxLength"] == 80
 

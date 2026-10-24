@@ -19,7 +19,6 @@ from assistant.cv_tailoring_core import (
     request,
 )
 
-
 SECTION_IMPORTANCE = (
     (
         r"what (?:we['\u2019]re|we are) looking for|requirements|"
@@ -199,11 +198,15 @@ def quoted_capability_span(option: str, quote: str) -> str | None:
             return re.escape(word[:-1]) + r"(?:s)?"
         return re.escape(word)
 
-    pattern = r"\b" + (
-        rf"(?:\s+{CAPABILITY_FILLER}){{0,3}}\s+".join(
-            word_pattern(word) for word in words
+    pattern = (
+        r"\b"
+        + (
+            rf"(?:\s+{CAPABILITY_FILLER}){{0,3}}\s+".join(
+                word_pattern(word) for word in words
+            )
         )
-    ) + r"\b"
+        + r"\b"
+    )
     match = re.search(pattern, canonical_text(quote), re.IGNORECASE)
     if match and match.group()[1:] == match.group()[1:].lower():
         return match.group()
@@ -243,8 +246,7 @@ def split_criterion(criterion: RequirementCriterion) -> list[RequirementCriterio
             continue
         capability_span = (
             quoted_capability_span(option, criterion.quote)
-            if criterion.kind == "technology"
-            and normalized(option) not in quote
+            if criterion.kind == "technology" and normalized(option) not in quote
             else None
         )
         if capability_span:
@@ -470,8 +472,7 @@ def recover_unquoted_options(
         valid = [
             option
             for option in criterion.options
-            if option.strip()
-            and normalized(option) in normalized(criterion.quote)
+            if option.strip() and normalized(option) in normalized(criterion.quote)
         ]
         removed = [option for option in criterion.options if option not in valid]
         if removed:
@@ -583,7 +584,8 @@ def source_requirement_quotes(
                     for c_index, criterion in enumerate(criteria):
                         if isinstance(criterion, dict):
                             criterion["id"] = (
-                                criterion.get("id") or f"{source_id}/criterion/{c_index}"
+                                criterion.get("id")
+                                or f"{source_id}/criterion/{c_index}"
                             )
                             criterion["quote"] = criterion.get("quote") or quote
                 resolved.append(requirement)
@@ -604,7 +606,9 @@ def source_requirement_quotes(
                 skipped.add(source_id)
             continue
         if not isinstance(requirement, dict):
-            raise ModelOutputError(f"Requirement must be an object: {source_id}", response)
+            raise ModelOutputError(
+                f"Requirement must be an object: {source_id}", response
+            )
         requirement["id"] = source_id
         requirement["quote"] = sources[source_id]
         requirement.setdefault("text", sources[source_id])
@@ -778,7 +782,9 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
             heading = normalized(line).rstrip(":")
             if re.fullmatch(NON_REQUIREMENT_SECTIONS, heading):
                 in_section = False
-            elif any(re.fullmatch(pattern, heading) for pattern, _ in SECTION_IMPORTANCE):
+            elif any(
+                re.fullmatch(pattern, heading) for pattern, _ in SECTION_IMPORTANCE
+            ):
                 in_section = True
             elif re.fullmatch(JOB_SECTION_HEADINGS, heading):
                 in_section = False

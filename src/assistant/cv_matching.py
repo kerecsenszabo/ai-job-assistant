@@ -398,7 +398,8 @@ def unkey_semantic_decisions(
                 for source_id in decision["evidence_ids"]
             ):
                 raise ModelOutputError(
-                    "Semantic evidence IDs must be short aliases (e0, e1, ...).", response
+                    "Semantic evidence IDs must be short aliases (e0, e1, ...).",
+                    response,
                 )
             decision["evidence_ids"] = [
                 (evidence_aliases or {}).get(source_id, source_id)

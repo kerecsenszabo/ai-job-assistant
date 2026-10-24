@@ -98,7 +98,11 @@ def _tailor_with_report(
     evidence = source_evidence(cv)
     with measure_stage("job_analysis"):
         job, fingerprint, cache_hit = get_parsed_job(
-            description, llm, cache_dir=job_cache, refresh=refresh_job_analysis, model_name=model_name
+            description,
+            llm,
+            cache_dir=job_cache,
+            refresh=refresh_job_analysis,
+            model_name=model_name,
         )
     effective_rubric = rubric or ScoringRubric()
     with measure_stage("matching"):

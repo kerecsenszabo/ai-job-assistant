@@ -227,7 +227,9 @@ def request(
             return schema.model_validate_json(response)
         except (ValidationError, json.JSONDecodeError, ModelOutputError) as exc:
             if i == max_retries - 1:
-                message = f"The language model returned invalid {schema.__name__} JSON: "
+                message = (
+                    f"The language model returned invalid {schema.__name__} JSON: "
+                )
                 if isinstance(exc, ValidationError):
                     message += "; ".join(
                         f"{'.'.join(map(str, error['loc'])) or '$'}: {error['msg']}"
@@ -309,4 +311,3 @@ def mentions(text: str, phrase: str) -> bool:
             normalized(text),
         )
     )
-
