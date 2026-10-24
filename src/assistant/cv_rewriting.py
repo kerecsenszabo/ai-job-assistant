@@ -32,6 +32,9 @@ NUMBERS = re.compile(r"(?<!\w)\d+(?:[.,]\d+)*(?:%|\+)?")
 FIRST_PERSON = re.compile(
     r"\b(?:I|[Mm]e|[Mm]y|[Mm]ine|[Ww]e|[Uu]s|[Oo]ur|[Oo]urs)\b"
 )
+FIRST_PERSON_START = re.compile(
+    r"^(?:I|Me|My|Mine|We|Us|Our|Ours)\b", re.IGNORECASE
+)
 THIRD_PERSON_CANDIDATE = re.compile(r"\bthe (?:candidate|applicant)\b", re.IGNORECASE)
 
 
@@ -46,6 +49,8 @@ def mechanical_rejection(sentence: DraftSentence, sources: list[EvidenceItem]) -
     if terms:
         return "Named terms absent from cited evidence: " + ", ".join(terms)
     if sentence.target_id != "summary":
+        if FIRST_PERSON_START.match(sentence.text.strip()):
+            return "Experience bullets must not begin with first-person pronouns."
         prefix = CLIENT_PREFIX.match(sources[0].text)
         if prefix and not sentence.text.startswith(prefix.group()):
             return "The rewrite removed or changed an original context prefix."
@@ -223,7 +228,7 @@ def rewrite(
             )
             if granite42_first_person_summary and i == 0:
                 summary_schema = draft_schema["properties"]["summary_sentences"]
-                summary_schema["maxItems"] = 1
+                summary_schema["maxItems"] = 3
                 summary_schema["items"]["properties"]["text"]["pattern"] = (
                     r"^(I |My )"
                 )
@@ -243,8 +248,8 @@ def rewrite(
                 )
                 if granite42_first_person_summary:
                     summary_instruction += (
-                        " Propose exactly one complete first-person sentence beginning "
-                        "with 'I ' or 'My '. Cite sources that explicitly support every "
+                        " Propose concise first-person summary sentences (each beginning "
+                        "with 'I ' or 'My '). Cite sources that explicitly support every "
                         "named tool or practice; job-description wording is context, "
                         "never evidence."
                     )
@@ -253,7 +258,9 @@ def rewrite(
                 Draft,
                 "Rewrite every selected work-experience bullet into clear, concise, "
                 "professional CV language, rather than merely selecting, reordering, "
-                "or copying the source bullets. Use direct action verbs, remove wordiness, "
+                "or copying the source bullets. Use direct action verbs (e.g. 'Designed', "
+                "'Implemented', 'Led'); NEVER start bullets with 'I', 'My', 'We', "
+                "or any first-person pronouns. Remove wordiness, "
                 "and improve sentence structure while preserving every factual detail. "
                 "Highlight outcomes only when the original bullet states them; never "
                 "invent impact or metrics to make a bullet sound stronger. Keep the "
@@ -269,7 +276,14 @@ def rewrite(
                 "different bullets/projects, borrow skills from other evidence, remove "
                 "client prefixes, or change ownership, scale, tools, numbers or qualifiers. "
                 "Each entry text may contain multiple sentences. "
-                + summary_instruction,
+                + (
+                    (
+                        "\nSummary instructions (for summary_sentences only, NOT for bullets): "
+                        + summary_instruction
+                    )
+                    if summary_instruction != "Return an empty summary_sentences list."
+                    else summary_instruction
+                ),
                 data,
                 json_schema=draft_schema,
                 transform_response=lambda response: capture_rewrite_response(

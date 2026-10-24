@@ -2133,3 +2133,30 @@ def test_named_skills_are_kept_when_production_proof_cites_only_work_bullets(cv)
         "scikit-learn",
         "XGBoost",
     ]
+
+
+def test_skills_mentioned_in_requirement_criteria_options_are_selected(cv):
+    cv.skills.extend(["Databricks", "Apache Spark", "MLflow"])
+    requirement = Requirement(
+        id="r",
+        text="Big data and distributed processing",
+        quote="Big data and distributed processing",
+        importance="required",
+        criteria=[
+            RequirementCriterion(
+                id="c",
+                text="Big data tools",
+                quote="Big data tools",
+                kind="technology",
+                options=["Apache Spark", "Databricks"],
+            )
+        ],
+    )
+    proposed = criterion_match(requirement, "direct", ["skills/2", "skills/3"])
+    report = TailoringReport(
+        requirements=[requirement], matches=[proposed], evidence=source_evidence(cv)
+    )
+    selected = select_evidence(report)
+    selected_skills = [item.text for item in selected if item.section == "skills"]
+    assert "Databricks" in selected_skills
+    assert "Apache Spark" in selected_skills

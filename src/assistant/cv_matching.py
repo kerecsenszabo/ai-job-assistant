@@ -394,6 +394,7 @@ def unkey_semantic_decisions(
                 )
             if not all(
                 source_id in (evidence_aliases or {}).keys()
+                or source_id in (evidence_aliases or {}).values()
                 for source_id in decision["evidence_ids"]
             ):
                 raise ModelOutputError(
@@ -723,6 +724,7 @@ def select_evidence(report: TailoringReport) -> list[EvidenceItem]:
     report.contextual_evidence_ids = []
     relevance: dict[str, float] = {}
     named_skills: set[str] = set()
+    evidence_by_id = {item.id: item for item in report.evidence}
     requirements = {item.id: item for item in report.requirements}
     for match in report.matches:
         if match.status not in ("direct", "partial"):
@@ -732,11 +734,39 @@ def select_evidence(report: TailoringReport) -> list[EvidenceItem]:
             relevance[source_id] = relevance.get(source_id, 0) + (
                 report.rubric.weight(requirements[match.requirement_id]) * credit
             )
+            if source_id in evidence_by_id:
+                cited_item = evidence_by_id[source_id]
+                for item in report.evidence:
+                    if item.section == "skills" and mentions(
+                        cited_item.text.replace("-", " "),
+                        item.text.replace("-", " "),
+                    ):
+                        named_skills.add(item.id)
+                        relevance[item.id] = relevance.get(item.id, 0) + (
+                            0.5
+                            * report.rubric.weight(requirements[match.requirement_id])
+                            * credit
+                        )
         requirement = requirements[match.requirement_id]
         for item in report.evidence:
-            if item.section == "skills" and mentions(
-                requirement.quote.replace("-", " "),
-                item.text.replace("-", " "),
+            if item.section == "skills" and (
+                mentions(
+                    requirement.quote.replace("-", " "),
+                    item.text.replace("-", " "),
+                )
+                or mentions(
+                    requirement.text.replace("-", " "),
+                    item.text.replace("-", " "),
+                )
+                or any(
+                    mentions(c.quote.replace("-", " "), item.text.replace("-", " "))
+                    or mentions(c.text.replace("-", " "), item.text.replace("-", " "))
+                    or any(
+                        mentions(opt.replace("-", " "), item.text.replace("-", " "))
+                        for opt in c.options
+                    )
+                    for c in requirement.criteria
+                )
             ):
                 named_skills.add(item.id)
                 relevance[item.id] = relevance.get(item.id, 0) + (

@@ -514,7 +514,7 @@ def recover_unquoted_options(
     return requirement.model_copy(update={"criteria": criteria}), [warning + "."]
 
 
-def job_description_chunks(description: str, max_chars: int = 400) -> list[str]:
+def job_description_chunks(description: str, max_chars: int = 800) -> list[str]:
     """Bound extraction output by splitting at source line or word boundaries."""
     description = description.strip()
     if len(description) <= max_chars:
@@ -565,6 +565,31 @@ def source_requirement_quotes(
     requirements = job.get("requirements")
     if requirements is None:
         requirements = {}
+    if isinstance(requirements, list):
+        resolved = []
+        for index, requirement in enumerate(requirements):
+            if isinstance(requirement, dict):
+                source_id = requirement.get("id") or f"source/{index}"
+                quote = (
+                    requirement.get("quote")
+                    or requirement.get("text")
+                    or sources.get(source_id, "")
+                )
+                requirement["id"] = source_id
+                requirement["quote"] = quote
+                requirement.setdefault("text", quote)
+                criteria = requirement.get("criteria")
+                if isinstance(criteria, list):
+                    for c_index, criterion in enumerate(criteria):
+                        if isinstance(criterion, dict):
+                            criterion["id"] = (
+                                criterion.get("id") or f"{source_id}/criterion/{c_index}"
+                            )
+                            criterion["quote"] = criterion.get("quote") or quote
+                resolved.append(requirement)
+        job["requirements"] = resolved
+        job.pop("warnings", None)
+        return json.dumps(job, ensure_ascii=True)
     if not isinstance(requirements, dict):
         raise ModelOutputError(
             f"Requirements must be an object, got {type(requirements).__name__}.",

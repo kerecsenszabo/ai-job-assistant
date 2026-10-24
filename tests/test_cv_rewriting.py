@@ -552,3 +552,47 @@ def test_transport_errors_propagate(setup, stage):
         responses.insert(0, proposal())
     with pytest.raises(RuntimeError, match="transport failed"):
         run(setup, responses)
+
+
+@pytest.mark.parametrize(
+    "first_person_bullet",
+    [
+        "I built Python pipelines.",
+        "My work involved building Python pipelines.",
+        "We developed Python pipelines.",
+    ],
+)
+def test_first_person_experience_bullets_are_mechanically_rejected(setup, first_person_bullet):
+    draft = proposal([first_person_bullet, ORIGINALS[1], ORIGINALS[2]])
+    result, report, _, calls = run(setup, [draft])
+    assert result.experience[0].bullets == ORIGINALS
+    assert len(calls) == 1
+    bullet_audit = next(a for a in report.rewrites if a.target_id == IDS[0])
+    assert bullet_audit.status == "rejected"
+    assert "first-person pronouns" in bullet_audit.reason
+
+
+def test_experience_bullet_prompt_forbids_first_person_pronouns(setup):
+    _, _, _, calls = run(setup, [proposal(), verdicts()])
+    instruction = calls[0][0].to_messages()[0].content
+    assert "NEVER start bullets with 'I'" in instruction
+    assert "action verbs" in instruction
+
+
+def test_granite42_first_person_summary_supports_multi_sentence(setup):
+    remaining = iter([proposal(), verdicts()])
+    calls = []
+
+    def respond(prompt, **kwargs):
+        calls.append((prompt, kwargs))
+        return json.dumps(next(remaining))
+
+    llm = RunnableLambda(respond)
+    llm.model = "granite4.2:3b"
+    cv, report, selected = setup
+    diagnostics = TailorDiagnostics()
+    rewrite(cv, llm, report, selected, "Python role", diagnostics)
+    schema = calls[0][1]["format"]
+    summaries = schema["properties"]["summary_sentences"]
+    assert summaries["maxItems"] == 3
+    assert summaries["items"]["properties"]["text"]["pattern"] == r"^(I |My )"
