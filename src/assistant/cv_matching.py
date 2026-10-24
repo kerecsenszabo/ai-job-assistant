@@ -355,9 +355,25 @@ def unkey_semantic_decisions(
     try:
         payload = json.loads(response)
     except json.JSONDecodeError as exc:
-        raise ModelOutputError(
-            "Semantic matching returned invalid JSON.", response
-        ) from exc
+        # Models without constrained JSON output sometimes wrap an otherwise
+        # valid object in Markdown or a short preamble. Recover only a complete
+        # JSON object; normal schema and citation validation still follows.
+        decoder = json.JSONDecoder()
+        payload = None
+        for offset, character in enumerate(response):
+            if character != "{":
+                continue
+            try:
+                candidate, _ = decoder.raw_decode(response[offset:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                payload = candidate
+                break
+        if payload is None:
+            raise ModelOutputError(
+                "Semantic matching returned invalid JSON.", response
+            ) from exc
     if not isinstance(payload, dict) or not isinstance(payload.get("decisions"), dict):
         return response
     for key, decision in payload["decisions"].items():
@@ -416,7 +432,10 @@ def semantic_decisions(
         schema = CriterionMatch.model_json_schema()
         schema["properties"].pop("criterion_id")
         schema["required"].remove("criterion_id")
-        ids = [source_aliases[item.id] for item in candidates[criterion_id]]
+        # The model receives the union evidence object below, so permit that
+        # same union for every criterion. Otherwise valid IDs shown for another
+        # criterion can be selected by the model and rejected locally.
+        ids = list(source_aliases.values())
         if ids:
             schema["properties"]["evidence_ids"]["items"]["enum"] = ids
             schema["properties"]["evidence_ids"]["minItems"] = 1
@@ -482,7 +501,10 @@ def semantic_decisions(
         prompt = (
             "Independently verify and correct proposed decisions. " if review else ""
         ) + instruction
-        for attempt in range(2):
+        # Some local models return a well-formed decision but cite evidence
+        # retrieved for a different criterion. Give those models more than
+        # one chance to correct the citation before failing the benchmark.
+        for attempt in range(3):
             try:
                 response = request(
                     llm,
@@ -504,7 +526,7 @@ def semantic_decisions(
                     )
                 corrected = []
                 for decision in response.decisions:
-                    allowed = {item.id for item in candidates[decision.criterion_id]}
+                    allowed = set(originals)
                     if not set(decision.evidence_ids) <= allowed or (
                         decision.status in ("direct", "partial")
                         and not decision.evidence_ids
@@ -530,9 +552,26 @@ def semantic_decisions(
                     )
                 return corrected
             except ModelOutputError as exc:
-                if attempt == 1:
+                if attempt == 2:
                     raise
-                prompt += f"\nPrevious reply was invalid: {exc} Correct it."
+                if "invalid JSON" in str(exc):
+                    prompt += (
+                        "\nYour previous reply was not valid JSON matching the "
+                        "requested schema. Return the complete decisions object "
+                        "again as raw JSON only, with every required criterion "
+                        "exactly once and no extra keys. Validation detail: "
+                        f"{exc}"
+                    )
+                else:
+                    prompt += (
+                        "\nYour previous reply cited evidence that is not allowed for "
+                        "its criterion. Return the complete decisions object again. "
+                        "For each criterion, use only IDs from that criterion's "
+                        "candidate_evidence_ids list; do not substitute evidence "
+                        "shown for another criterion. Preserve the status only if "
+                        "the allowed evidence supports it. Validation detail: "
+                        f"{exc}"
+                    )
         raise AssertionError("Unreachable semantic matching attempt.")
 
     proposed = assess("matching", False)
