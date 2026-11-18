@@ -12,6 +12,7 @@ COMMANDS = {
     "generate": ("assistant.cv_generator", "Generate or tailor a CV PDF"),
     "chat": ("assistant.chat", "Chat with a CV and job descriptions"),
     "benchmark": ("assistant.model_benchmark", "Compare local models on CV tailoring"),
+    "diagnose-cloud": ("assistant.cloud_diagnostics", "Inspect one Ollama Cloud response"),
 }
 
 

@@ -33,6 +33,10 @@ class PermissiveModel(BaseModel):
 class ModelOutputError(ValueError):
     """A malformed or internally inconsistent model response."""
 
+
+class EmptyModelResponseError(ModelOutputError):
+    """The provider returned no text; retrying the same request is wasteful."""
+
     def __init__(self, message: str, response: str | None = None):
         super().__init__(message)
         self.response = response
@@ -186,6 +190,7 @@ def request(
     *,
     json_schema: dict | None = None,
     transform_response: Callable[[str], str] | None = None,
+    raw_response_callback: Callable[[str], None] | None = None,
     stage: str = "analysis",
 ) -> ResponseModel:
     output_schema = (
@@ -214,17 +219,36 @@ def request(
         and llm_supports_structured_output(llm)
         else structured_llm(llm, schema)
     )
-    max_retries = 1 if os.environ.get("DISABLE_RETRIES") == "1" else 2
+    max_retries = (
+        1
+        if raw_response_callback is not None or os.environ.get("DISABLE_RETRIES") == "1"
+        else 2
+    )
     for i in range(max_retries):
         try:
-            with measure_model_call(stage):
+            with measure_model_call(stage, attempt=i + 1):
                 response = (prompt | constrained | StrOutputParser()).invoke(
                     {"data": json.dumps(data, ensure_ascii=True)}
                 )
+            if raw_response_callback is not None:
+                raw_response_callback(response)
+            if not response.strip():
+                raise EmptyModelResponseError(
+                    "The provider returned an empty message (no text content). "
+                    "Stopping without retrying to avoid additional model calls."
+                )
+            if response.lstrip().startswith("```json"):
+                response = response.lstrip()[7:]
+                response = response.rsplit("```", 1)[0].strip()
+            elif response.lstrip().startswith("```"):
+                response = response.lstrip()[3:]
+                response = response.rsplit("```", 1)[0].strip()
             if transform_response is not None:
                 response = transform_response(response)
             return schema.model_validate_json(response)
         except (ValidationError, json.JSONDecodeError, ModelOutputError) as exc:
+            if isinstance(exc, EmptyModelResponseError):
+                raise
             if i == max_retries - 1:
                 message = (
                     f"The language model returned invalid {schema.__name__} JSON: "

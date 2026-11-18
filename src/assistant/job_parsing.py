@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from langchain_core.runnables import Runnable
 
 from assistant.cv_tailoring_core import (
     ModelOutputError,
+    EmptyModelResponseError,
     ParsedJob,
     Requirement,
     RequirementCriterion,
@@ -748,7 +750,12 @@ def job_extraction_schema(sources: dict[str, str]) -> dict:
     return schema
 
 
-def parse_job(llm: Runnable, description: str) -> ParsedJob:
+def parse_job(
+    llm: Runnable,
+    description: str,
+    *,
+    raw_response_callback=None,
+) -> ParsedJob:
     instruction = (
         "Extract assessable job requirements from the supplied source lines. "
         "Return a requirements object keyed by source ID. "
@@ -794,7 +801,10 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
     unique = []
     requirements = []
     warnings = []
-    for chunk in job_description_chunks("\n".join(assessable_job_lines(description))):
+    chunks = job_description_chunks("\n".join(assessable_job_lines(description)))
+    if raw_response_callback is not None:
+        chunks = chunks[:1]
+    for chunk in chunks:
         if not chunk:
             continue
         sources = {
@@ -803,7 +813,13 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
             if line.strip()
         }
         feedback = ""
-        for attempt in range(3):
+        attempts = (
+            1
+            if raw_response_callback is not None
+            or os.environ.get("DISABLE_RETRIES") == "1"
+            else 3
+        )
+        for attempt in range(attempts):
             skipped: set[str] = set()
             missing: list[str] = []
             try:
@@ -817,6 +833,7 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
                         response, sources, skipped
                     ),
                     stage="job_parsing",
+                    raw_response_callback=raw_response_callback,
                 )
                 keyed = not job.requirements or all(
                     item.id.startswith("source/") for item in job.requirements
@@ -876,7 +893,7 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
                     try:
                         normalize_criteria(requirement)
                     except UnquotedOptionError:
-                        if attempt != 2:
+                        if attempt != attempts - 1:
                             raise
                         requirement, recovered = recover_unquoted_options(requirement)
                         normalize_criteria(requirement)
@@ -885,7 +902,9 @@ def parse_job(llm: Runnable, description: str) -> ParsedJob:
                 job = job.model_copy(update={"requirements": cleaned})
                 break
             except ModelOutputError as exc:
-                if attempt == 2:
+                if isinstance(exc, EmptyModelResponseError):
+                    raise
+                if attempt == attempts - 1:
                     raise
                 feedback = (
                     f"\nThe previous extraction failed validation: {exc} "

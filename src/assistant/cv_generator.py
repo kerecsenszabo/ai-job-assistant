@@ -99,7 +99,9 @@ def local_llm(
         }
     return ChatOllama(
         model=model,
-        reasoning=None if model.startswith(REASONING_REQUIRED) else False,
+        # Cloud models vary in how they handle Ollama's `think` option; leave
+        # it at the provider default instead of forcing thinking off.
+        reasoning=None if cloud or model.startswith(REASONING_REQUIRED) else False,
         temperature=0,
         num_ctx=CONTEXT_TOKENS,
         num_predict=num_predict or 4096,
@@ -569,7 +571,14 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Disable completed matching cache for this run",
     )
+    parser.add_argument(
+        "--no-retries",
+        action="store_true",
+        help="Make one attempt per model call; saves cloud usage but may fail on malformed output",
+    )
     args = parser.parse_args(argv)
+    if args.no_retries:
+        os.environ["DISABLE_RETRIES"] = "1"
     if args.refresh_job_analysis and args.job is None:
         parser.error("--refresh-job-analysis requires --job")
     if args.refresh_matching and args.job is None:

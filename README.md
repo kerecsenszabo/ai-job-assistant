@@ -68,6 +68,15 @@ models do not currently support schema-constrained output, so this project asks
 for JSON in the prompt and validates every response itself. Review the generated
 CV and its report before using it. See [Ollama Cloud docs](https://docs.ollama.com/cloud).
 
+To troubleshoot the provider without running the multi-call CV workflow, use
+the one-request diagnostic (up to 64 generated tokens, no retries):
+
+```bash
+uv run job-assistant diagnose-cloud --model gemma4:31b
+```
+
+It displays the HTTP status and raw response body while redacting the API key.
+
 ## Generate or Tailor a CV
 
 Use `uv run job-assistant` for every workflow. `uv run python -m assistant`
