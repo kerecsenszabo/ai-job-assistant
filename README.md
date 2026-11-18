@@ -4,8 +4,13 @@
 chat with your CV and job descriptions using local RAG, and compare local models
 on the tailoring workload.
 
-Everything runs locally. Dependency, model and initial TeX downloads need
-internet access; your documents are not sent to cloud APIs.
+By default, inference and document processing run locally. Dependency, model
+and initial TeX downloads need internet access; documents are not sent to cloud
+APIs unless you enable Ollama Cloud.
+
+Ollama Cloud is optional. Use `--cloud` with an Ollama model name and set
+`OLLAMA_API_KEY` in your shell; CVs and job descriptions sent in that run are
+processed by Ollama's cloud service. Local Ollama remains the default.
 
 ## Setup
 
@@ -36,6 +41,32 @@ recommended. For less memory, select a smaller installed model such as
 `qwen3.5:2b`.
 The chat embedding model downloads on first use, and Tectonic may download
 resources on the first PDF export.
+
+## Use Ollama Cloud
+
+Create an API key at [ollama.com/settings/keys](https://ollama.com/settings/keys)
+and make it available to the current terminal without committing it to the
+repository:
+
+```bash
+export OLLAMA_API_KEY="your-key"
+```
+
+Then pass `--cloud` and a cloud model. For example:
+
+```bash
+uv run job-assistant generate \
+  --cv output/cv.source.json --job data/job_descriptions/target.txt \
+  --output output/target-cv.pdf --cloud --model gemma4:31b
+
+uv run job-assistant chat --cloud --model gemma4:31b
+```
+
+Ollama's available models, free starter usage, and limits can change; check the
+Cloud model library and account usage page if a model is unavailable. Cloud
+models do not currently support schema-constrained output, so this project asks
+for JSON in the prompt and validates every response itself. Review the generated
+CV and its report before using it. See [Ollama Cloud docs](https://docs.ollama.com/cloud).
 
 ## Generate or Tailor a CV
 

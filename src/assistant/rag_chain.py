@@ -21,8 +21,10 @@ Context:
 )
 
 
-def ask(question: str, top_k: int = 5, *, model: str = MODEL) -> str:
+def ask(
+    question: str, top_k: int = 5, *, model: str = MODEL, cloud: bool = False
+) -> str:
     context_chunks = search(question, top_k=top_k)
     context = "\n\n---\n\n".join(context_chunks)
-    chain = RAG_PROMPT | local_llm(model) | StrOutputParser()
+    chain = RAG_PROMPT | local_llm(model, cloud=cloud) | StrOutputParser()
     return chain.invoke({"context": context, "question": question})

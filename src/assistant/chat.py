@@ -18,6 +18,9 @@ def main(argv: list[str] | None = None) -> None:
         description=__doc__,
     )
     parser.add_argument("--model", default=MODEL, help="Ollama model name")
+    parser.add_argument(
+        "--cloud", action="store_true", help="Call the model through Ollama Cloud"
+    )
     parser.add_argument("--cv", type=Path, help="CV PDF to index before chatting")
     parser.add_argument(
         "--jobs",
@@ -61,7 +64,7 @@ def main(argv: list[str] | None = None) -> None:
 
         console.print("\n[bold blue]Assistant[/bold blue]")
         with console.status("[dim]Thinking...[/dim]", spinner="dots"):
-            response = ask(question, model=args.model)
+            response = ask(question, model=args.model, cloud=args.cloud)
 
         console.print(Panel(response, border_style="blue", padding=(0, 1)))
 

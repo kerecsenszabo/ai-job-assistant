@@ -10,7 +10,6 @@ from typing import Callable, Literal, TypeVar
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from assistant.cv_generator import (
@@ -18,7 +17,7 @@ from assistant.cv_generator import (
     CV,
     TailorDiagnostics,
     structured_llm,
-    supports_structured_output,
+    llm_supports_structured_output,
 )
 from assistant.performance import RunPerformance, measure_model_call
 
@@ -212,7 +211,7 @@ def request(
     constrained = (
         llm.bind(format=json_schema)
         if json_schema is not None
-        and (not isinstance(llm, ChatOllama) or supports_structured_output(llm.model))
+        and llm_supports_structured_output(llm)
         else structured_llm(llm, schema)
     )
     max_retries = 1 if os.environ.get("DISABLE_RETRIES") == "1" else 2

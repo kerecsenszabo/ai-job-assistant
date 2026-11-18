@@ -4,6 +4,10 @@ import argparse
 import subprocess
 from importlib import import_module
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 COMMANDS = {
     "generate": ("assistant.cv_generator", "Generate or tailor a CV PDF"),
     "chat": ("assistant.chat", "Chat with a CV and job descriptions"),

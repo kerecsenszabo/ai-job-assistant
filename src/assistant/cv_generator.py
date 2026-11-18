@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -35,7 +36,19 @@ CONTEXT_BULLETS = 4
 
 
 def supports_structured_output(model_name: str) -> bool:
-    return model_name not in MODELS_WITHOUT_STRUCTURED_OUTPUT
+    # Ollama Cloud currently accepts JSON instructions but not schema-constrained
+    # output. Keep the local structured-output behavior unchanged.
+    return not model_name.endswith(":cloud") and model_name not in MODELS_WITHOUT_STRUCTURED_OUTPUT
+
+
+def llm_supports_structured_output(llm: Runnable) -> bool:
+    return not (
+        isinstance(llm, ChatOllama)
+        and (
+            (llm.base_url or "").startswith("https://ollama.com")
+            or not supports_structured_output(llm.model)
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -63,25 +76,40 @@ class TailorDiagnostics:
     report: TailoringReport | None = None
 
 
-def local_llm(model: str, *, num_predict: int | None = None) -> ChatOllama:
+def local_llm(
+    model: str, *, num_predict: int | None = None, cloud: bool = False
+) -> ChatOllama:
     """Local LLM with room for a full CV round-trip.
 
     Uses the chat endpoint, and leaves reasoning at the model default for
     harmony-style models: ``gpt-oss`` returns an empty reply to both
     completion requests and requests that disable thinking.
     """
+    options = {}
+    if cloud:
+        api_key = os.environ.get("OLLAMA_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "Ollama Cloud needs OLLAMA_API_KEY. Create a key at "
+                "https://ollama.com/settings/keys and set it in your environment."
+            )
+        options = {
+            "base_url": "https://ollama.com",
+            "client_kwargs": {"headers": {"Authorization": f"Bearer {api_key}"}},
+        }
     return ChatOllama(
         model=model,
         reasoning=None if model.startswith(REASONING_REQUIRED) else False,
         temperature=0,
         num_ctx=CONTEXT_TOKENS,
         num_predict=num_predict or 4096,
+        **options,
     )
 
 
 def structured_llm(llm: Runnable, schema: type[BaseModel]) -> Runnable:
     """Constrain an Ollama request to the JSON schema for *schema*."""
-    if isinstance(llm, ChatOllama) and not supports_structured_output(llm.model):
+    if not llm_supports_structured_output(llm):
         return llm
     return llm.bind(format=schema.model_json_schema())
 
@@ -95,20 +123,23 @@ class _InstalledModels(BaseModel):
     models: list[_InstalledModel]
 
 
-def local_model_identity(llm: ChatOllama) -> str:
+def local_model_identity(llm: ChatOllama, *, cloud: bool = False) -> str:
     """Include installed weights and inference settings in matching-cache keys."""
     base_url = llm.base_url or "http://localhost:11434"
-    response = httpx.get(f"{base_url.rstrip('/')}/api/tags", timeout=5)
-    response.raise_for_status()
-    installed = _InstalledModels.model_validate_json(response.text)
     name = llm.model if ":" in llm.model else f"{llm.model}:latest"
-    matched = next((item for item in installed.models if item.name == name), None)
-    if matched is None:
-        raise ValueError(f"Cannot identify installed model {name} for matching cache.")
+    digest = "cloud-model-name-only"
+    if not cloud:
+        response = httpx.get(f"{base_url.rstrip('/')}/api/tags", timeout=5)
+        response.raise_for_status()
+        installed = _InstalledModels.model_validate_json(response.text)
+        matched = next((item for item in installed.models if item.name == name), None)
+        if matched is None:
+            raise ValueError(f"Cannot identify installed model {name} for matching cache.")
+        digest = matched.digest
     return json.dumps(
         {
             "model": name,
-            "digest": matched.digest,
+            "digest": digest,
             "temperature": llm.temperature,
             "num_ctx": llm.num_ctx,
             "reasoning": llm.reasoning,
@@ -484,6 +515,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--output", type=Path, required=True, help="Output PDF path")
     parser.add_argument("--model", default=MODEL, help="Ollama model name")
     parser.add_argument(
+        "--cloud", action="store_true", help="Call the model through Ollama Cloud"
+    )
+    parser.add_argument(
         "--paper-size",
         choices=("a4", "letter"),
         default="a4",
@@ -556,7 +590,7 @@ def main(argv: list[str] | None = None) -> None:
     if any(path.resolve() in inputs for path in outputs):
         parser.error("Output files must not overwrite the source CV, job or rubric")
 
-    llm = local_llm(args.model)
+    llm = local_llm(args.model, cloud=args.cloud)
     with measure_run() as import_performance, measure_stage("import"):
         cv = load_cv(args.cv, llm=llm)
     if args.cv.suffix.lower() == ".pdf":
@@ -571,7 +605,11 @@ def main(argv: list[str] | None = None) -> None:
         )
     if args.job is not None:
         matching_cache = None if args.no_matching_cache else args.matching_cache
-        identity = local_model_identity(llm) if matching_cache is not None else None
+        identity = (
+            local_model_identity(llm, cloud=args.cloud)
+            if matching_cache is not None
+            else None
+        )
         rubric = (
             ScoringRubric.model_validate_json(args.rubric.read_text(encoding="utf-8"))
             if args.rubric is not None
