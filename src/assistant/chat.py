@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from assistant.cv_generator import MODEL
+from assistant.cv_generator import DEFAULT_CLOUD_MODEL, MODEL
 
 console = Console()
 
@@ -17,7 +17,10 @@ def main(argv: list[str] | None = None) -> None:
         prog="job-assistant chat",
         description=__doc__,
     )
-    parser.add_argument("--model", default=MODEL, help="Ollama model name")
+    parser.add_argument(
+        "--model",
+        help=f"Ollama model name (default: {MODEL} locally, {DEFAULT_CLOUD_MODEL} with --cloud)",
+    )
     parser.add_argument(
         "--cloud", action="store_true", help="Call the model through Ollama Cloud"
     )
@@ -29,6 +32,7 @@ def main(argv: list[str] | None = None) -> None:
         help="Jobs to index with --cv (default: data/job_descriptions; empty for CV only)",
     )
     args = parser.parse_args(argv)
+    args.model = args.model or (DEFAULT_CLOUD_MODEL if args.cloud else MODEL)
     if args.jobs is not None and args.cv is None:
         parser.error("--jobs requires --cv; omit both to chat with the existing index")
     if args.cv is not None:

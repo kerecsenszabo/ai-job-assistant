@@ -146,6 +146,9 @@ models with `--models`. The default cloud shortlist is shown by
 `benchmark models --cloud`; cloud runs skip local model downloads and write the
 same complete CV outputs and rewrite audits to the benchmark database. Cloud
 runs send the CV and job descriptions to Ollama for processing.
+When `--cloud` is explicitly enabled, `generate`, `chat`, and
+`diagnose-cloud` default to `deepseek-v4.1-flash:cloud`. Local inference keeps
+`granite4.2:3b` as its default.
 `--refresh-job-analysis` reparses each job once before sharing its analysis
 across models. `--no-retries` limits each model call to one attempt and skips
 the summary recovery call.
@@ -171,3 +174,22 @@ as archives, not automatically migrated. If a chosen database has an unsupported
 schema, use a new path, for example `--database output/benchmarks-new.sqlite`,
 for both run and report. The former `output/model-benchmarks.sqlite` is not used
 by default.
+
+### Cloud model comparison (2026-11-18)
+
+Run `20261118T104842Z-f2175339` compared DeepSeek V4.1 Flash, GPT-OSS 120B and
+Gemma 4 31B across the same CV and Sanofi, HCLTech and Maisa jobs. Job analyses
+were refreshed and retries disabled. All 9 model/job cases completed.
+
+| Model | Match / must-have | Rewrites accepted / rejected / unclear | Mean seconds | Estimated cost |
+|---|---:|---:|---:|---:|
+| DeepSeek V4.1 Flash | 49.7% / 56.8% | 67 / 2 / 0 | 25.0 | $0.0408 |
+| GPT-OSS 120B | 42.8% / 58.1% | 59 / 4 / 1 | 23.0 | $0.0438 |
+| Gemma 4 31B | 54.4% / 61.8% | 52 / 23 / 0 | 26.9 | $0.0639 |
+
+DeepSeek V4.1 Flash is the default cloud model from this comparison because it
+had the lowest estimated cost and fewest rejected or unclear rewrite verdicts.
+Gemma had the highest match coverage. Coverage is evidence-to-requirement
+matching, not a model-quality score, and automated rewrite approvals still need
+human review. Cost estimates use the [Ollama pricing snapshot](https://ollama.com/pricing)
+checked on 2026-11-18; they are not billing receipts.

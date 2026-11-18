@@ -15,6 +15,7 @@ from pathlib import Path
 from assistant.cv_generator import (
     CONTEXT_TOKENS,
     CV,
+    DEFAULT_CLOUD_MODEL,
     TailorDiagnostics,
     load_cv,
     local_llm,
@@ -33,9 +34,9 @@ MODEL_SUITE = (
     ("granite4.2:3b", "TBD", "baseline"),
 )
 CLOUD_MODEL_SUITE = (
+    DEFAULT_CLOUD_MODEL,
     "gemma4:31b-cloud",
     "gpt-oss:120b-cloud",
-    "deepseek-v4.1-flash:cloud",
 )
 
 

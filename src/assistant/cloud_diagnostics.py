@@ -9,13 +9,17 @@ import time
 
 import httpx
 
+from assistant.cv_generator import DEFAULT_CLOUD_MODEL
+
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="job-assistant diagnose-cloud",
         description="Send one tiny prompt and display Ollama Cloud's raw response.",
     )
-    parser.add_argument("--model", default="gemma4:31b", help="Ollama Cloud model")
+    parser.add_argument(
+        "--model", default=DEFAULT_CLOUD_MODEL, help="Ollama Cloud model"
+    )
     parser.add_argument(
         "--job",
         help="Send the first actual job-parsing batch from this description (one call)",

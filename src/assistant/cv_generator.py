@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from assistant.cv_tailoring import TailoringReport
 
 MODEL = "granite4.2:3b"
+DEFAULT_CLOUD_MODEL = "deepseek-v4.1-flash:cloud"
 # Source CV + job description + full JSON reply exceeds Ollama's default window.
 MODELS_WITHOUT_STRUCTURED_OUTPUT = {"qwen3.5:2b", "qwen3.5:4b"}
 CONTEXT_TOKENS = 20000
@@ -525,7 +526,10 @@ def main(argv: list[str] | None = None) -> None:
         "--job", type=Path, help="Job description TXT or PDF (omit for the full CV)"
     )
     parser.add_argument("--output", type=Path, required=True, help="Output PDF path")
-    parser.add_argument("--model", default=MODEL, help="Ollama model name")
+    parser.add_argument(
+        "--model",
+        help=f"Ollama model name (default: {MODEL} locally, {DEFAULT_CLOUD_MODEL} with --cloud)",
+    )
     parser.add_argument(
         "--cloud", action="store_true", help="Call the model through Ollama Cloud"
     )
@@ -587,6 +591,7 @@ def main(argv: list[str] | None = None) -> None:
         help="Make one attempt per model call; saves cloud usage but may fail on malformed output",
     )
     args = parser.parse_args(argv)
+    args.model = args.model or (DEFAULT_CLOUD_MODEL if args.cloud else MODEL)
     if args.no_retries:
         os.environ["DISABLE_RETRIES"] = "1"
     if args.refresh_job_analysis and args.job is None:

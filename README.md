@@ -39,6 +39,9 @@ The same default model serves generation and chat. Use `--model` to choose
 another installed model. The default is `granite4.2:3b`; 8GB+ RAM is
 recommended. For less memory, select a smaller installed model such as
 `qwen3.5:2b`.
+With `--cloud`, generation and chat default to `deepseek-v4.1-flash:cloud`;
+cloud calls still require explicitly passing `--cloud` and setting
+`OLLAMA_API_KEY`.
 The chat embedding model downloads on first use, and Tectonic may download
 resources on the first PDF export.
 
@@ -57,9 +60,9 @@ Then pass `--cloud` and a cloud model. For example:
 ```bash
 uv run job-assistant generate \
   --cv output/cv.source.json --job data/job_descriptions/target.txt \
-  --output output/target-cv.pdf --cloud --model gemma4:31b
+  --output output/target-cv.pdf --cloud
 
-uv run job-assistant chat --cloud --model gemma4:31b
+uv run job-assistant chat --cloud
 ```
 
 Ollama's available models, free starter usage, and limits can change; check the
@@ -72,7 +75,7 @@ To troubleshoot the provider without running the multi-call CV workflow, use
 the one-request diagnostic (up to 64 generated tokens, no retries):
 
 ```bash
-uv run job-assistant diagnose-cloud --model gemma4:31b
+uv run job-assistant diagnose-cloud
 ```
 
 It displays the HTTP status and raw response body while redacting the API key.
@@ -182,6 +185,25 @@ when usage metadata and a known cloud rate are available. Estimates use the
 Ollama rate snapshot dated 2026-11-18; see `pricing_source`, `pricing_tier`, and
 `pricing_status` on each log record. They are estimates rather than billing
 receipts, and earlier log records are not backfilled.
+
+### Benchmark results (2026-11-18)
+
+Run `20261118T104842Z-f2175339` compared three cloud models on the same CV and
+Sanofi, HCLTech and Maisa job descriptions, with refreshed job analyses and no
+retries. All 9 cases completed. Match coverage measures CV evidence matched to
+job requirements; it is not a model-quality score.
+
+| Model | Match / must-have | Rewrites accepted / rejected / unclear | Mean seconds | Estimated cost |
+|---|---:|---:|---:|---:|
+| DeepSeek V4.1 Flash | 49.7% / 56.8% | 67 / 2 / 0 | 25.0 | $0.0408 |
+| GPT-OSS 120B | 42.8% / 58.1% | 59 / 4 / 1 | 23.0 | $0.0438 |
+| Gemma 4 31B | 54.4% / 61.8% | 52 / 23 / 0 | 26.9 | $0.0639 |
+
+DeepSeek V4.1 Flash is the default cloud model based on this comparison: it had
+the lowest estimated cost and fewest rejected or unclear rewrite verdicts.
+Gemma had the strongest match coverage. Rewrite approvals remain automated
+signals and need human review. Cost estimates use the [Ollama pricing snapshot](https://ollama.com/pricing)
+checked on 2026-11-18; they are not billing receipts.
 
 Benchmarks retain timing, failures, evidence decisions and generated outputs in
 `output/benchmarks.sqlite`. Prefer a reviewed source JSON so every model
