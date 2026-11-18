@@ -141,6 +141,19 @@ for a different SQLite file. Use the same `--database` path for both `run` and
 If a job-analysis cache is stale, use `benchmark run --refresh-job-analysis`
 to reparse each job once and share its updated analysis across models.
 `--pull` downloads missing models.
+For Ollama Cloud, set `OLLAMA_API_KEY`, add `--cloud`, and optionally choose
+models with `--models`. The default cloud shortlist is shown by
+`benchmark models --cloud`; cloud runs skip local model downloads and write the
+same complete CV outputs and rewrite audits to the benchmark database. Cloud
+runs send the CV and job descriptions to Ollama for processing.
+`--refresh-job-analysis` reparses each job once before sharing its analysis
+across models. `--no-retries` limits each model call to one attempt and skips
+the summary recovery call.
+New benchmark model-call entries in `output/model-calls.jsonl` include input,
+cached-input and output token counts, benchmark run/model/job IDs, and estimated
+USD cost where provider usage and a known rate are available. The estimates use
+the Ollama price snapshot dated 2026-11-18 and include a rate tier and status;
+they are not billing receipts. Existing log lines are unchanged.
 When benchmarking a PDF, the first model imports it once and saves the extracted
 facts as `<run-id>.source.json` beside the database.
 

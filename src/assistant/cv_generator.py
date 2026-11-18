@@ -97,11 +97,21 @@ def local_llm(
             "base_url": "https://ollama.com",
             "client_kwargs": {"headers": {"Authorization": f"Bearer {api_key}"}},
         }
+    if cloud and model.startswith(REASONING_REQUIRED):
+        # Keep reasoning enabled for gpt-oss, while reserving more of the output
+        # budget for the requested JSON than the provider's default effort.
+        reasoning = "low"
+    elif cloud and model.startswith("deepseek-v4.1-flash"):
+        # This model can spend its full response in the thinking channel and
+        # return empty content when the provider default is used.
+        reasoning = False
+    else:
+        reasoning = None if cloud else False
     return ChatOllama(
         model=model,
         # Cloud models vary in how they handle Ollama's `think` option; leave
         # it at the provider default instead of forcing thinking off.
-        reasoning=None if cloud or model.startswith(REASONING_REQUIRED) else False,
+        reasoning=reasoning,
         temperature=0,
         num_ctx=CONTEXT_TOKENS,
         num_predict=num_predict or 4096,

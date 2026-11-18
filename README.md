@@ -153,6 +153,36 @@ uv run job-assistant benchmark run \
 uv run job-assistant benchmark report
 ```
 
+To compare Ollama Cloud models on the Sanofi, HCLTech and Maisa descriptions,
+set `OLLAMA_API_KEY` as above and run:
+
+```bash
+uv run job-assistant benchmark models --cloud
+uv run job-assistant benchmark run --cloud \
+  --refresh-job-analysis --no-retries \
+  --cv data/cv.json \
+  --jobs data/job_descriptions/sanofi.txt \
+        data/job_descriptions/hcltech_senior_data_ai.txt \
+        data/job_descriptions/maisa.txt \
+  --database output/cloud-benchmarks.sqlite
+uv run job-assistant benchmark report --database output/cloud-benchmarks.sqlite
+```
+
+With `--cloud` and no `--models`, the runner uses the cloud shortlist printed by
+`benchmark models --cloud`; pass `--models model-a model-b` to choose 2–3
+models. The database retains each tailored CV, evidence report and rewrite audit
+so you can inspect individual outputs as well as aggregate scores. Cloud runs
+send the source CV and job descriptions to Ollama for processing.
+`--refresh-job-analysis` reparses each job once and reuses its analysis across
+models; `--no-retries` makes one attempt per model call and skips the rewrite
+summary recovery call.
+Each future benchmark model call is appended to `output/model-calls.jsonl` with
+token counts, benchmark run/model/job identifiers, and an estimated USD cost
+when usage metadata and a known cloud rate are available. Estimates use the
+Ollama rate snapshot dated 2026-11-18; see `pricing_source`, `pricing_tier`, and
+`pricing_status` on each log record. They are estimates rather than billing
+receipts, and earlier log records are not backfilled.
+
 Benchmarks retain timing, failures, evidence decisions and generated outputs in
 `output/benchmarks.sqlite`. Prefer a reviewed source JSON so every model
 uses the same facts. PDF input also works: the first selected model imports it

@@ -220,9 +220,10 @@ def split_criterion(criterion: RequirementCriterion) -> list[RequirementCriterio
     if criterion.kind == "general":
         return [criterion]
     if not criterion.options:
-        raise ModelOutputError(
-            "Technology and language criteria need explicit options."
-        )
+        # Some models classify a whole qualification as technology/language
+        # while omitting its named options. Preserve the sourced criterion as a
+        # general semantic criterion instead of rejecting the entire job parse.
+        return [criterion.model_copy(update={"kind": "general", "options": []})]
     quote = normalized(criterion.quote)
     source_quote = canonical_text(criterion.quote)
     role = ROLE_TITLE.match(source_quote)
@@ -353,9 +354,15 @@ def split_criterion(criterion: RequirementCriterion) -> list[RequirementCriterio
             )
         )
     if not separated and not general:
-        raise ModelOutputError(
-            "A technology criterion has no assessable named tools or capabilities."
-        )
+        # A model can classify a phrase such as "similar tools" as the only
+        # option in a source line that also names real capabilities. If all
+        # extracted options are generic descriptors, retain the source quote as
+        # a general criterion instead of failing the entire job analysis.
+        return [
+            criterion.model_copy(
+                update={"text": criterion.quote, "kind": "general", "options": []}
+            )
+        ]
     return separated + general
 
 
@@ -585,6 +592,10 @@ def source_requirement_quotes(
                 if isinstance(criteria, list):
                     for c_index, criterion in enumerate(criteria):
                         if isinstance(criterion, dict):
+                            # Importance is defined per source requirement. Some
+                            # models repeat it on individual criteria even though
+                            # the extraction schema correctly omits that field.
+                            criterion.pop("importance", None)
                             criterion["id"] = (
                                 criterion.get("id")
                                 or f"{source_id}/criterion/{c_index}"
@@ -618,6 +629,8 @@ def source_requirement_quotes(
         if isinstance(criteria, list):
             for index, criterion in enumerate(criteria):
                 if isinstance(criterion, dict):
+                    # Importance is defined per source requirement, not criterion.
+                    criterion.pop("importance", None)
                     criterion["id"] = f"{source_id}/criterion/{index}"
                     criterion["quote"] = sources[source_id]
                     options = criterion.get("options")

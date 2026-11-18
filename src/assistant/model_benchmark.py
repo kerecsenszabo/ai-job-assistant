@@ -1,8 +1,9 @@
-"""Benchmark local Ollama models on the CV-tailoring workload."""
+"""Benchmark Ollama models on the CV-tailoring workload."""
 
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import subprocess
 import time
@@ -20,6 +21,7 @@ from assistant.cv_generator import (
     tailor_cv,
 )
 from assistant.cv_parser import read_document
+from assistant.performance import benchmark_call_context
 
 DEFAULT_DATABASE = Path("output/benchmarks.sqlite")
 DEFAULT_JOB_CACHE = Path("output/job-requirements")
@@ -29,6 +31,11 @@ MODEL_SUITE = (
     ("qwen3.5:4b", "TBD", "challenger"),
     ("granite4.1:3b", "TBD", "baseline"),
     ("granite4.2:3b", "TBD", "baseline"),
+)
+CLOUD_MODEL_SUITE = (
+    "gemma4:31b-cloud",
+    "gpt-oss:120b-cloud",
+    "deepseek-v4.1-flash:cloud",
 )
 
 
@@ -212,21 +219,29 @@ def benchmark_one(
     *,
     job_cache: Path | None = None,
     refresh_job_analysis: bool = False,
+    cloud: bool = False,
 ) -> BenchmarkResult:
     """Run one model against one job and collect workload-specific metrics."""
     job_description = read_document(job_path)
     diagnostics = TailorDiagnostics()
     started = time.perf_counter()
     try:
-        tailored = tailor_cv(
-            cv,
-            job_description,
+        with benchmark_call_context(
+            benchmark_run_id=run_id,
             model=model,
-            llm=local_llm(model, num_predict=MAX_OUTPUT_TOKENS),
-            diagnostics=diagnostics,
-            job_cache=job_cache,
-            refresh_job_analysis=refresh_job_analysis,
-        )
+            job=job_path.name,
+            repetition=repetition,
+            cloud=cloud,
+        ):
+            tailored = tailor_cv(
+                cv,
+                job_description,
+                model=model,
+                llm=local_llm(model, num_predict=MAX_OUTPUT_TOKENS, cloud=cloud),
+                diagnostics=diagnostics,
+                job_cache=job_cache,
+                refresh_job_analysis=refresh_job_analysis,
+            )
     except Exception as exc:
         return BenchmarkResult(
             run_id=run_id,
@@ -252,6 +267,8 @@ def benchmark_one(
 
 def run_benchmark(args: argparse.Namespace) -> None:
     """Execute and persist a benchmark matrix."""
+    if getattr(args, "no_retries", False):
+        os.environ["DISABLE_RETRIES"] = "1"
     missing_jobs = [job for job in args.jobs if not job.is_file()]
     if missing_jobs:
         names = ", ".join(str(job) for job in missing_jobs)
@@ -263,6 +280,9 @@ def run_benchmark(args: argparse.Namespace) -> None:
             f"Job descriptions given more than once: {', '.join(duplicates)}"
         )
     suite_models = [model for model, _, _ in MODEL_SUITE]
+    cloud = getattr(args, "cloud", False)
+    if cloud and args.models is None:
+        suite_models = list(CLOUD_MODEL_SUITE)
     if args.models:
         models = []
         for model in args.models:
@@ -272,14 +292,17 @@ def run_benchmark(args: argparse.Namespace) -> None:
                 models.append(model)
     else:
         models = suite_models
-    available = installed_model_info()
-    missing = [model for model in models if model not in available]
-    if missing and not args.pull:
-        names = ", ".join(missing)
-        raise SystemExit(f"Models not installed: {names}. Re-run with --pull.")
-    for model in missing:
-        pull_model(model)
-    available = installed_model_info()
+    if cloud:
+        available = {model: ("cloud", "remote") for model in models}
+    else:
+        available = installed_model_info()
+        missing = [model for model in models if model not in available]
+        if missing and not args.pull:
+            names = ", ".join(missing)
+            raise SystemExit(f"Models not installed: {names}. Re-run with --pull.")
+        for model in missing:
+            pull_model(model)
+        available = installed_model_info()
 
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     connection = connect(args.database)
@@ -288,7 +311,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
         (
             run_id,
             datetime.now(UTC).isoformat(),
-            command_output("ollama", "--version"),
+            ("Ollama Cloud" if cloud else command_output("ollama", "--version")),
             str(args.cv),
             CONTEXT_TOKENS,
         ),
@@ -302,14 +325,25 @@ def run_benchmark(args: argparse.Namespace) -> None:
         models_to_insert,
     )
     connection.commit()
-    cv = load_cv(args.cv, model=models[0])
+    if cloud and args.cv.suffix.lower() == ".pdf":
+        with benchmark_call_context(
+            benchmark_run_id=run_id,
+            model=models[0],
+            job="<cv_import>",
+            repetition=0,
+            cloud=True,
+        ):
+            cv = load_cv(args.cv, llm=local_llm(models[0], cloud=True))
+    else:
+        cv = load_cv(args.cv, model=models[0])
     if args.cv.suffix.lower() == ".pdf":
         source_path = args.database.parent / f"{run_id}.source.json"
         source_path.write_text(cv.model_dump_json(indent=2), encoding="utf-8")
         print(
             f"PDF imported once for all models; review extracted facts in {source_path}."
         )
-        unload_model(models[0])
+        if not cloud:
+            unload_model(models[0])
     total = len(models) * len(args.jobs) * args.repeat
     position = 0
     pending_refresh = set(args.jobs) if args.refresh_job_analysis else set()
@@ -326,6 +360,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
                     cv,
                     job_cache=args.job_cache,
                     refresh_job_analysis=job in pending_refresh,
+                    cloud=cloud,
                 )
                 save_result(connection, result)
                 if result.status == "ok":
@@ -338,12 +373,18 @@ def run_benchmark(args: argparse.Namespace) -> None:
                     )
                 else:
                     print(f"  ERROR: {result.error}")
-        unload_model(model)
+        if not cloud:
+            unload_model(model)
     print(f"Run {run_id} saved to {args.database}")
     print_report(connection, run_id)
 
 
-def print_report(connection: sqlite3.Connection, run_id: str | None = None) -> None:
+def print_report(
+    connection: sqlite3.Connection,
+    run_id: str | None = None,
+    *,
+    details: bool = False,
+) -> None:
     """Print aggregate results for a run, defaulting to the latest."""
     if run_id is None:
         row = connection.execute(
@@ -428,10 +469,37 @@ def print_report(connection: sqlite3.Connection, run_id: str | None = None) -> N
         "cached = results reusing completed matching (a cold benchmark has 0).\n"
         "Full evidence, requirement matches and rewrite audits are in report_json."
     )
+    if details:
+        rows = connection.execute(
+            """SELECT model, job, repetition, status, report_json
+               FROM benchmark_results WHERE run_id = ? ORDER BY model, job, repetition""",
+            (run_id,),
+        )
+        for model, job, repetition, status, report_json in rows:
+            print(f"\n## {model} / {job} / run {repetition} [{status}]")
+            if not report_json:
+                print("No tailoring report was produced.")
+                continue
+            import json
+
+            report = json.loads(report_json)
+            if report.get("warnings"):
+                print("Warnings: " + "; ".join(report["warnings"]))
+            for item in report.get("rewrites", []):
+                print(
+                    f"\n[{item['status']}] {item['target_id']} — {item['reason']}\n"
+                    f"  Original:  {item['original']}\n"
+                    f"  Proposed:  {item['proposed']}\n"
+                    f"  Exported:  {item['exported']}"
+                )
 
 
-def list_models() -> None:
+def list_models(*, cloud: bool = False) -> None:
     """Display the curated model ladder and local installation status."""
+    if cloud:
+        print("Ollama Cloud shortlist (select with --models; no local download needed):")
+        print("\n".join(f"  {model}" for model in CLOUD_MODEL_SUITE))
+        return
     available = installed_model_info()
     print(f"{'model':<44} {'download':<9} {'tier':<10} installed")
     print("-" * 74)
@@ -454,7 +522,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     models_parser = subparsers.add_parser("models", help="show the curated model suite")
-    models_parser.set_defaults(handler=lambda args: list_models())
+    models_parser.add_argument("--cloud", action="store_true")
+    models_parser.set_defaults(handler=lambda args: list_models(cloud=args.cloud))
 
     run_parser = subparsers.add_parser("run", help="run and persist benchmarks")
     run_parser.add_argument(
@@ -464,6 +533,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--jobs", type=Path, nargs="+", required=True, help="Job TXT/PDF files"
     )
     run_parser.add_argument("--models", nargs="+")
+    run_parser.add_argument(
+        "--cloud", action="store_true", help="run models through Ollama Cloud"
+    )
+    run_parser.add_argument(
+        "--no-retries",
+        action="store_true",
+        help="make one attempt per model call, including job parsing",
+    )
     run_parser.add_argument("--repeat", type=int, default=1)
     run_parser.add_argument("--pull", action="store_true")
     run_parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
@@ -477,9 +554,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     report_parser = subparsers.add_parser("report", help="report a stored benchmark")
     report_parser.add_argument("--run-id")
+    report_parser.add_argument(
+        "--details", action="store_true", help="show rewrite audits per case"
+    )
     report_parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
     report_parser.set_defaults(
-        handler=lambda args: print_report(connect(args.database), args.run_id)
+        handler=lambda args: print_report(
+            connect(args.database), args.run_id, details=args.details
+        )
     )
     return parser.parse_args(argv)
 

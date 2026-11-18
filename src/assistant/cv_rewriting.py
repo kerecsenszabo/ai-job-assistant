@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from langchain_core.runnables import Runnable
@@ -146,7 +147,12 @@ def rewrite_review_schema(ids: list[str]) -> dict:
 
 
 def capture_rewrite_response(raw: list[str], response: str) -> str:
-    """Keep the original response and prevent JSON duplicate keys being overwritten."""
+    """Normalize rewrite JSON while rejecting duplicate keys and trailing prose.
+
+    Some cloud responses append extra closing braces after a complete JSON
+    object. Accept at most two such braces, but keep rejecting arbitrary trailing
+    text or a second object.
+    """
     raw.append(response)
 
     def unique_pairs(pairs):
@@ -156,7 +162,13 @@ def capture_rewrite_response(raw: list[str], response: str) -> str:
         return result
 
     try:
-        return json.dumps(json.loads(response, object_pairs_hook=unique_pairs))
+        text = response.strip()
+        decoder = json.JSONDecoder(object_pairs_hook=unique_pairs)
+        value, end = decoder.raw_decode(text)
+        trailing = text[end:].strip()
+        if trailing and (len(trailing) > 2 or set(trailing) != {"}"}):
+            return response
+        return json.dumps(value)
     except ValueError, TypeError:
         return response
 
@@ -574,7 +586,12 @@ def rewrite(
             if entry.target_id == "summary"
         )
     )
-    if description is not None and summary_mechanical_rejection and summary_sources:
+    if (
+        description is not None
+        and summary_mechanical_rejection
+        and summary_sources
+        and os.environ.get("DISABLE_RETRIES") != "1"
+    ):
         retry_audits: list[RewriteAudit] = []
         retry_raw: list[str] = []
         retry_review_started = False
