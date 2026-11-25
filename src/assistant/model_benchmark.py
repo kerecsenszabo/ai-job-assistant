@@ -17,6 +17,7 @@ from assistant.cv_generator import (
     CV,
     DEFAULT_CLOUD_MODEL,
     TailorDiagnostics,
+    configured_cv_path,
     load_cv,
     local_llm,
     tailor_cv,
@@ -528,7 +529,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     run_parser = subparsers.add_parser("run", help="run and persist benchmarks")
     run_parser.add_argument(
-        "--cv", type=Path, required=True, help="Source CV PDF or JSON"
+        "--cv",
+        type=Path,
+        default=configured_cv_path(),
+        help="Source CV PDF or JSON (defaults to JOB_ASSISTANT_CV_PATH)",
     )
     run_parser.add_argument(
         "--jobs", type=Path, nargs="+", required=True, help="Job TXT/PDF files"
@@ -564,7 +568,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             connect(args.database), args.run_id, details=args.details
         )
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.command == "run" and args.cv is None:
+        parser.error("--cv is required unless JOB_ASSISTANT_CV_PATH is set")
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:

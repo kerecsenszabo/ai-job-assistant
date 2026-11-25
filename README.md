@@ -35,6 +35,19 @@ ollama pull granite4.2:3b
 mkdir -p data/job_descriptions
 ```
 
+The source CV may live in any private repository or directory. Configure its
+path once in your environment or local `.env` file:
+
+```bash
+# Add JOB_ASSISTANT_CV_PATH to the existing .env, or export it in your shell:
+export JOB_ASSISTANT_CV_PATH=/path/to/private/cv.json
+```
+
+`generate` and `benchmark run` use this configured path when `--cv` is omitted.
+`--cv` selects a PDF or another JSON source for one run. Personal CV data is
+ignored by this repository. A fresh checkout can copy `.env.example` when it
+does not already have a `.env` file.
+
 The same default model serves generation and chat. Use `--model` to choose
 another installed model. The default is `granite4.2:3b`; 8GB+ RAM is
 recommended. For less memory, select a smaller installed model such as
@@ -86,18 +99,21 @@ Use `uv run job-assistant` for every workflow. `uv run python -m assistant`
 is equivalent. The supported commands are `generate`, `chat`, and `benchmark`;
 implementation modules are not standalone CLIs.
 
-Place your text-based CV PDF at `data/cv.pdf` and a target job description at
-`data/job_descriptions/target.txt` (or use your own paths), then run:
+Put a target job description at `data/job_descriptions/target.txt` (or use your
+own path), then run:
 
 ```bash
-# Polish the full CV
-uv run job-assistant generate \
-  --cv data/cv.pdf --output output/cv.pdf
+# Polish the private source CV
+uv run job-assistant generate --output output/cv.pdf
 
 # Tailor to a job description (TXT or PDF)
 uv run job-assistant generate \
-  --cv data/cv.pdf --job data/job_descriptions/target.txt \
+  --job data/job_descriptions/target.txt \
   --output output/target-cv.pdf
+
+# Import a PDF for one run
+uv run job-assistant generate \
+  --cv data/cv.pdf --output output/imported-cv.pdf
 ```
 
 The model extracts structured facts, selects relevant content when a job is supplied, and improves
@@ -116,14 +132,16 @@ uv run job-assistant generate \
   --output output/target-cv.pdf
 ```
 
-JSON input remains supported; `data/cv.example.json` shows the format.
+JSON input remains supported; `data/cv.example.json` shows the format. JSON
+summaries may be provided as one string or as a list of sentences.
 The match report stays separate from the application CV.
 
 ## Chat with Your CV and Jobs
 
 ```bash
 uv run job-assistant chat \
-  --cv data/cv.pdf --jobs data/job_descriptions/target.txt
+  --cv "$JOB_ASSISTANT_CV_PATH" \
+  --jobs data/job_descriptions/target.txt
 
 # Return to the existing document index without re-ingesting
 uv run job-assistant chat
@@ -163,7 +181,6 @@ set `OLLAMA_API_KEY` as above and run:
 uv run job-assistant benchmark models --cloud
 uv run job-assistant benchmark run --cloud \
   --refresh-job-analysis --no-retries \
-  --cv data/cv.json \
   --jobs data/job_descriptions/sanofi.txt \
         data/job_descriptions/hcltech_senior_data_ai.txt \
         data/job_descriptions/maisa.txt \
@@ -231,10 +248,11 @@ file if an existing database has an unsupported schema. The previous
 - `src/assistant/model_benchmark.py`: model comparison.
 - `src/assistant/performance.py`: shared stage timings and model-call measurements.
 
-Keep personal CV PDFs/JSON in `data/`, job TXT/PDF files in
-`data/job_descriptions/`, generated files in `output/`, and the chat index in
-`chroma_db/`. These locations and file types are gitignored; arbitrary other
-files under `data/` are not necessarily private. Do not publish personal artifacts.
+Keep the structured CV in its configured private location. Temporary PDF imports
+can stay in `data/`; job TXT/PDF files belong in `data/job_descriptions/`,
+generated files in `output/`, and the chat index in `chroma_db/`. These
+locations and file types are gitignored; arbitrary other files under `data/`
+are not necessarily private. Do not publish personal artifacts.
 
 Run `uv run job-assistant --help` or `uv run job-assistant generate --help`
 for command options. See [the generator guide](docs/cv-generator.md) for source

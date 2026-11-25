@@ -5,6 +5,7 @@ See the [README](../README.md) for setup, PDF generation, chat and benchmarks.
 ## Inputs
 
 For `job-assistant generate`, `--cv` accepts a text-based PDF or structured JSON.
+When omitted, it reads the path configured by `JOB_ASSISTANT_CV_PATH`.
 `--job` accepts a UTF-8 TXT file or text-based PDF; omit it to polish the full CV.
 `--output` must end in `.pdf` and must not overwrite any input file.
 Scanned PDFs require OCR before use. PDF import copies source text into the
@@ -19,9 +20,11 @@ Reuse it for repeat exports and model comparisons to avoid repeating extraction.
 
 [`data/cv.example.json`](../data/cv.example.json) shows the schema. It includes
 contact details, summary, skills, experience, education, publications and
-certifications. Optional `languages` entries contain `name` and `proficiency`;
-proficiency must be explicit, never inferred. Optional `ai_native` items render
-an AI-Native Practice section. Unknown fields are rejected.
+certifications. A summary list is joined with spaces into the single summary
+string used by the generator. Optional `languages` entries contain `name` and
+`proficiency`; proficiency must be explicit, never inferred. Optional
+`ai_native` items render an AI-Native Practice section. Unknown fields are
+rejected.
 
 ## Tailoring and Factual Safeguards
 
@@ -101,6 +104,7 @@ Run `uv run job-assistant generate --help` for all options.
 
 | Option | Purpose |
 |---|---|
+| `--cv FILE` | Source PDF/JSON; defaults to `JOB_ASSISTANT_CV_PATH` |
 | `--model NAME` | Choose an installed Ollama model; default `granite4.2:3b` |
 | `--paper-size {a4,letter}` | PDF page size; default A4 |
 | `--font-size {10,11,12}` | Base LaTeX font size in points; default 12 |
@@ -130,7 +134,8 @@ refresh rather than silent reuse. Cached matches contain personal data.
 
 Use `uv run job-assistant benchmark models`, `benchmark run`, or `benchmark report`.
 Run `uv run job-assistant benchmark run --help` for workload options.
-The default database is `output/benchmarks.sqlite`.
+The default database is `output/benchmarks.sqlite`. `benchmark run` reads the
+CV configured by `JOB_ASSISTANT_CV_PATH` when `--cv` is omitted.
 
 The benchmark runner compares tailoring, not PDF compilation. It reuses parsed
 job criteria but recomputes matching for each case. Benchmark model responses

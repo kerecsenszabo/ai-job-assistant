@@ -32,7 +32,7 @@ def search(query: str, top_k: int = 5, source_filter: str | None = None) -> list
     collection = get_collection()
     if collection.count() == 0:
         raise ValueError(
-            "Chat index is empty. Run job-assistant chat --cv data/cv.pdf first."
+            "Chat index is empty. Run job-assistant chat --cv PATH first."
         )
     query_vector = embed([query])[0]
     where = {"source": source_filter} if source_filter else None

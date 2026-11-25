@@ -26,7 +26,7 @@ To run the benchmark for the new model suite, use:
 
 ```bash
 uv run job-assistant benchmark run \
-  --cv data/cv.json --jobs data/job_descriptions/elc.txt \
+  --jobs data/job_descriptions/elc.txt \
   --models gemma4:e2b gemma4:e4b qwen3.5:2b qwen3.5:4b granite4.1:3b granite4.2:3b \
   --pull
 ```

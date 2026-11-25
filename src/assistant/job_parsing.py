@@ -25,17 +25,19 @@ SECTION_IMPORTANCE = (
     (
         r"what (?:we['\u2019]re|we are) looking for|requirements|"
         r"(?:required|minimum|essential|basic) qualifications|must[- ]haves?|"
-        r"apply,? if you have|what does it take to fit the bill\?",
+        r"apply,? if you have|what does it take to fit the bill\?|"
+        r"your qualifications(?:, your influence)?",
         "required",
     ),
     (
         r"(?:preferred|desirable) qualifications|nice[- ]to[- ]haves?|"
-        r"bonus (?:skills|points)|preferred",
+        r"bonus (?:skills|points)|(?:preferred|desirable) skills"
+        r"(?: and [a-z -]+)?|preferred",
         "preferred",
     ),
     (
         r"(?:your |key )?responsibilities|what you['\u2019]ll do|"
-        r"what you will do(?: daily)?",
+        r"what you will do(?: daily)?|insight on your impact",
         "responsibility",
     ),
 )
@@ -81,7 +83,10 @@ def prepare_job_description(description: str) -> str:
     """Restore soft-wrapped lines while retaining real section boundaries."""
     lines: list[str] = []
     for raw in description.splitlines():
-        line = collapse_repeated_heading(raw.strip())
+        raw_line = raw.strip()
+        if re.fullmatch(r"[●•▪◦*\-]", raw_line):
+            continue
+        line = collapse_repeated_heading(raw_line)
         if not line:
             continue
         if (
@@ -92,6 +97,9 @@ def prepare_job_description(description: str) -> str:
                 re.match(r"^[a-z(]", line)
                 or re.search(
                     r"(?:[,:]|\b(?:and|or|for|with|across|of|to|the))$", lines[-1]
+                )
+                or re.search(
+                    r"(?:\bin|such as|including)$", lines[-1], re.IGNORECASE
                 )
             )
             and not lines[-1].endswith((".", "!", "?", ";"))
@@ -136,7 +144,7 @@ def source_clauses(line: str) -> list[str]:
         for part in re.split(
             r"\n|\s*•\s*|(?<=;)\s+(?=(?:You|We|Your|Our|The|This|Thus|"
             r"Moreover|Additionally)\b)|(?<=[.!?])(?<!e\.g\.)(?<!i\.e\.)(?<!vs\.)"
-            r"(?:\s+|(?=[A-Z]))(?=[A-Z])",
+            r"(?!NET\b)(?:\s+|(?=[A-Z]))(?=[A-Z])",
             line,
         )
         if part.strip()

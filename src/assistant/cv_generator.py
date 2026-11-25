@@ -25,6 +25,14 @@ if TYPE_CHECKING:
 
 MODEL = "granite4.2:3b"
 DEFAULT_CLOUD_MODEL = "deepseek-v4.1-flash:cloud"
+
+
+def configured_cv_path() -> Path | None:
+    """Return the CV path supplied through the runtime environment."""
+    value = os.environ.get("JOB_ASSISTANT_CV_PATH")
+    return Path(value).expanduser() if value else None
+
+
 # Source CV + job description + full JSON reply exceeds Ollama's default window.
 MODELS_WITHOUT_STRUCTURED_OUTPUT = {"qwen3.5:2b", "qwen3.5:4b"}
 CONTEXT_TOKENS = 20000
@@ -305,7 +313,14 @@ def load_cv(path: Path, *, llm: Runnable | None = None, model: str = MODEL) -> C
     if path.suffix.lower() != ".json":
         raise ValueError(f"Expected a PDF or JSON CV: {path}")
     try:
-        return CV.model_validate_json(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("summary"), list) and all(
+            isinstance(item, str) for item in data["summary"]
+        ):
+            data["summary"] = " ".join(
+                item.strip() for item in data["summary"] if item.strip()
+            )
+        return CV.model_validate(data)
     except FileNotFoundError as exc:
         raise FileNotFoundError(f"CV JSON not found: {path}") from exc
     except json.JSONDecodeError as exc:
@@ -440,7 +455,7 @@ def to_latex(cv: CV, *, page_settings: PageSettings = PageSettings()) -> str:
         for item in cv.education:
             lines.append(
                 rf"\noindent\textbf{{{escape_latex(item.degree)}}} -- "
-                rf"{escape_latex(item.institution)} \hfill {escape_latex(item.dates)}"
+                rf"{escape_latex(item.institution)} \hfill {escape_latex(item.dates)} \\"
             )
     if cv.publications:
         lines.append(r"\section*{Publications}")
@@ -520,7 +535,10 @@ def main(argv: list[str] | None = None) -> None:
         description="Generate a CV PDF from a PDF or JSON CV, optionally tailored to a job.",
     )
     parser.add_argument(
-        "--cv", type=Path, required=True, help="Source CV PDF or JSON file"
+        "--cv",
+        type=Path,
+        default=configured_cv_path(),
+        help="Source CV PDF or JSON file (defaults to JOB_ASSISTANT_CV_PATH)",
     )
     parser.add_argument(
         "--job", type=Path, help="Job description TXT or PDF (omit for the full CV)"
@@ -591,6 +609,8 @@ def main(argv: list[str] | None = None) -> None:
         help="Make one attempt per model call; saves cloud usage but may fail on malformed output",
     )
     args = parser.parse_args(argv)
+    if args.cv is None:
+        parser.error("--cv is required unless JOB_ASSISTANT_CV_PATH is set")
     args.model = args.model or (DEFAULT_CLOUD_MODEL if args.cloud else MODEL)
     if args.no_retries:
         os.environ["DISABLE_RETRIES"] = "1"

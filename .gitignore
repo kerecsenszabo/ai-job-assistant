@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Personal CV source lives in a separate private repository.
+data/cv.json
+
 # Project data (keep CV private)
 data/*.pdf
 data/*.json

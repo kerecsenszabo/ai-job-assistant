@@ -24,7 +24,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--cloud", action="store_true", help="Call the model through Ollama Cloud"
     )
-    parser.add_argument("--cv", type=Path, help="CV PDF to index before chatting")
+    parser.add_argument(
+        "--cv", type=Path, help="CV PDF or JSON to index before chatting"
+    )
     parser.add_argument(
         "--jobs",
         type=Path,
@@ -45,7 +47,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if get_collection().count() == 0:
         parser.error(
-            "No documents indexed. Run job-assistant chat --cv data/cv.pdf first."
+            "No documents indexed. Run job-assistant chat --cv PATH first."
         )
     console.print(
         Panel.fit(
