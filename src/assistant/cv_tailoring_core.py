@@ -60,6 +60,7 @@ class EvidenceItem(StrictModel):
     role_index: int | None = None
     bullet_index: int | None = None
     context: str = ""
+    source_ids: list[str] = Field(default_factory=list)
 
 
 MatchStatus = Literal["direct", "partial", "not_evidenced", "unclear"]
@@ -165,6 +166,10 @@ class RewriteAudit(StrictModel):
 
 class TailoringReport(StrictModel):
     label: str = "CV-evidenced job match"
+    profile_name: str | None = None
+    requested_page_limit: int | None = None
+    final_page_count: int | None = None
+    layout_fallbacks: list[str] = Field(default_factory=list)
     match_percent: float | None = None
     must_have_percent: float | None = None
     rubric: ScoringRubric = Field(default_factory=ScoringRubric)
@@ -172,6 +177,9 @@ class TailoringReport(StrictModel):
     evidence: list[EvidenceItem] = Field(default_factory=list)
     matches: list[RequirementMatch] = Field(default_factory=list)
     selected_evidence_ids: list[str] = Field(default_factory=list)
+    exported_evidence_ids: list[str] = Field(default_factory=list)
+    omitted_evidence_ids: list[str] = Field(default_factory=list)
+    selection_scores: dict[str, float] = Field(default_factory=dict)
     contextual_evidence_ids: list[str] = Field(default_factory=list)
     unresolved_eligibility_ids: list[str] = Field(default_factory=list)
     rewrites: list[RewriteAudit] = Field(default_factory=list)
@@ -209,7 +217,7 @@ def request(
                 "object matching the requested schema. DO NOT add any preamble, "
                 "markdown formatting, conversational text, or explanations. "
                 "Start immediately with '{{' and end with '}}'. "
-                "The job describes desired qualifications, NEVER "
+                "The job or generic target profile describes desired emphasis, NEVER "
                 "candidate facts. Do not invent facts or infer absent experience.\n"
                 + "{instruction}\nOutput JSON schema:\n{output_schema}",
             ),

@@ -1,7 +1,8 @@
 # AI Job Assistant
 
-**PDF CV in, tailored PDF CV out.** Supply a job description to tailor the CV,
-chat with your CV and job descriptions using local RAG, and compare local models
+**PDF CV in, focused PDF CV out.** Generate a two-page generic machine learning
+engineer CV without a job description, supply a job description for targeted
+tailoring, chat with your CV and jobs using local RAG, and compare local models
 on the tailoring workload.
 
 By default, inference and document processing run locally. Dependency, model
@@ -103,7 +104,7 @@ Put a target job description at `data/job_descriptions/target.txt` (or use your
 own path), then run:
 
 ```bash
-# Polish the private source CV
+# Generate the simple two-page generic machine learning engineer CV
 uv run job-assistant generate --output output/cv.pdf
 
 # Tailor to a job description (TXT or PDF)
@@ -116,8 +117,11 @@ uv run job-assistant generate \
   --cv data/cv.pdf --output output/imported-cv.pdf
 ```
 
-The model extracts structured facts, selects relevant content when a job is supplied, and improves
-wording without authorizing new achievements, metrics, or skills. The output
+Without `--job`, the generator selects a machine-learning-relevant evidence
+pool from the full CV, rewrites every exported experience bullet and the
+profile summary, and trims optional content until the PDF fits two A4 pages.
+With `--job`, the existing targeted matching flow remains available.
+Generation never authorizes new achievements, metrics, or skills. The output
 uses a clean, ATS-friendly layout; it does not reproduce the input PDF design.
 Scanned PDFs need OCR before import.
 

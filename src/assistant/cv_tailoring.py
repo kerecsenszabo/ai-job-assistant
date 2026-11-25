@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from langchain_core.runnables import Runnable
 
@@ -74,6 +75,9 @@ from assistant.cv_rewriting import (
     rewrite_schema,
     summary_voice_rejection,
 )
+
+if TYPE_CHECKING:
+    from assistant.generic_cv import GenericMLProfile
 
 
 def _tailor_with_report(
@@ -214,17 +218,48 @@ def tailor_with_report(
         return result, report
 
 
-def polish_with_report(cv: CV, llm: Runnable) -> tuple[CV, TailoringReport]:
+def polish_with_report(
+    cv: CV,
+    llm: Runnable,
+    *,
+    profile: GenericMLProfile | None = None,
+) -> tuple[CV, TailoringReport]:
+    """Build the default two-page machine learning engineer CV.
+
+    Generic positioning selects a bounded evidence pool, then rewrites every
+    exported bullet and the summary through the same audit path as job tailoring.
+    The caller performs PDF page measurement after this function returns.
+    """
+    from assistant.generic_cv import (
+        GENERIC_ML_PROFILE,
+        GenericMLProfile,
+        build_generic_cv,
+        select_generic_evidence,
+    )
+
+    selected_profile = profile or GENERIC_ML_PROFILE
+    if not isinstance(selected_profile, GenericMLProfile):
+        raise ValueError("Generic CV profile has an unsupported type.")
     with measure_run() as performance:
         report = TailoringReport(
-            label="General-purpose CV rewrite audit",
+            label="Generic machine learning engineer CV",
+            profile_name=selected_profile.name,
+            requested_page_limit=selected_profile.max_pages,
             evidence=source_evidence(cv),
             performance=performance,
         )
-        selected = [item for item in report.evidence if item.section == "experience"]
-        report.selected_evidence_ids = [item.id for item in selected]
-        if not selected:
-            return cv.model_copy(deep=True), report
+        selected = select_generic_evidence(cv, report, selected_profile)
+        tailored = build_generic_cv(cv, selected)
         with measure_stage("rewriting"):
-            result = rewrite(cv, llm, report, selected, None, None)
+            result = rewrite(
+                tailored,
+                llm,
+                report,
+                selected,
+                None,
+                None,
+                target_context=selected_profile.prompt_context,
+                rewrite_summary=True,
+                merge_similar=True,
+            )
         return result, report

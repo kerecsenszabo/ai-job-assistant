@@ -180,11 +180,25 @@ def rewrite(
     selected: list[EvidenceItem],
     description: str | None,
     diagnostics: TailorDiagnostics | None,
+    *,
+    target_context: str | None = None,
+    rewrite_summary: bool | None = None,
+    merge_similar: bool = False,
 ) -> CV:
+    """Rewrite selected evidence while preserving its source and voice.
+
+    ``description`` is a job description for targeted runs. Generic profiles use
+    ``target_context`` instead, which enables the same audited summary path
+    without treating the profile as candidate evidence.
+    """
+    if rewrite_summary is None:
+        rewrite_summary = description is not None
+    effective_context = target_context or description
     originals = {item.id: item for item in report.evidence}
     targets = [item for item in selected if item.section == "experience"]
     data = {
         "job_description": description,
+        "target_context": target_context,
         "bullet_targets": [item.model_dump() for item in targets],
         "summary_evidence": [item.model_dump() for item in selected]
         + [item.model_dump() for item in report.evidence if item.section == "summary"],
@@ -221,7 +235,7 @@ def rewrite(
     draft = None
     granite42_first_person_summary = (
         getattr(llm, "model", None) == "granite4.2:3b"
-        and description is not None
+        and rewrite_summary
         and FIRST_PERSON.search(cv.summary)
     )
 
@@ -231,14 +245,14 @@ def rewrite(
             draft_schema = rewrite_schema(
                 batch,
                 sorted({item["id"] for item in data["summary_evidence"]}),
-                description is not None,
+                rewrite_summary,
             )
             if granite42_first_person_summary and i == 0:
                 summary_schema = draft_schema["properties"]["summary_sentences"]
                 summary_schema["maxItems"] = 6
                 summary_schema["items"]["properties"]["text"]["pattern"] = r"^(I |My )"
             summary_instruction = "Return an empty summary_sentences list."
-            if description is not None and i == 0:
+            if rewrite_summary and i == 0:
                 summary_instruction = (
                     "Also propose up to six summary_sentences entries, each "
                     "with a unique id from summary/0 through summary/5, text, and "
@@ -247,18 +261,20 @@ def rewrite(
                     "duration, expertise or production deployment. Preserve the "
                     "depth, scope, and completeness of the original summary; do not "
                     "truncate or over-condense it. Preserve the original summary voice. "
-                    "If it already fits the role, make only subtle, useful refinements "
+                    "If it already fits the target profile, make only subtle, useful "
+                    "refinements "
                     "or keep it; otherwise emphasize supported, relevant strengths "
                     "while maintaining comprehensive coverage of the candidate's background. "
-                    "Do not insert job keywords without citing candidate evidence for each claim. "
-                    "Never mention the hiring company."
+                    "Do not insert target keywords without citing candidate evidence "
+                    "for each claim. "
+                    "Never mention a hiring company."
                 )
                 if granite42_first_person_summary:
                     summary_instruction += (
                         " Preserve key points from the source summary in first-person "
                         "sentences (each beginning with 'I ' or 'My '). Cite sources that "
-                        "explicitly support every named tool or practice; job-description "
-                        "wording is context, never evidence."
+                        "explicitly support every named tool or practice; target wording "
+                        "is context, never evidence."
                     )
             batch_draft = request(
                 llm,
@@ -273,14 +289,28 @@ def rewrite(
                 "invent impact or metrics to make a bullet sound stronger. Keep the "
                 "original wording only when no safe wording improvement is possible. "
                 + (
-                    "Emphasize facts relevant to the job without adding its requirements "
+                    "Emphasize facts relevant to the target context without adding it "
                     "as candidate experience. "
-                    if description is not None
-                    else "Use general-purpose wording without targeting a particular job. "
+                    if effective_context is not None
+                    else "Use general-purpose wording without targeting a particular role. "
+                )
+                + (
+                    "Some targets contain two closely related source bullets from the "
+                    "same role. Merge each such target into one polished CV sentence, "
+                    "or at most two sentences, incorporating every material fact from "
+                    "all supplied source text. Do not merge across roles or turn grouped "
+                    "engineering work into a claim of broader ownership. "
+                    if merge_similar
+                    else ""
                 )
                 + "Return bullets as an object keyed by EXACT bullet evidence IDs, with "
                 "source_ids containing only that same ID and text. Never combine "
-                "different bullets/projects, borrow skills from other evidence, remove "
+                + (
+                    "unrelated bullets or projects, "
+                    if merge_similar
+                    else "different bullets/projects, "
+                )
+                + "borrow skills from other evidence, remove "
                 "client prefixes, or change ownership, scale, tools, numbers or qualifiers. "
                 "Each entry text may contain multiple sentences. "
                 + (
@@ -309,7 +339,7 @@ def rewrite(
             problems.append(f"Invalid rewrite response: {exc}")
             for item in targets:
                 record_audit(item.id, [item.id], "", "unclear", problems[-1])
-            if description is not None:
+            if rewrite_summary:
                 record_audit(
                     "summary",
                     ["summary/0"] if cv.summary else [],
@@ -385,7 +415,7 @@ def rewrite(
                         raise ValueError("Duplicate sentence ID.")
                     if target == "summary":
                         if (
-                            description is None
+                            not rewrite_summary
                             or not set(sentence.source_ids) <= summary_sources
                         ):
                             raise ValueError(
@@ -479,7 +509,14 @@ def rewrite(
                 "ownership (helped vs led), seniority, scope/scale, proficiency, tools, "
                 "metrics, years, client identity, team vs individual work, and "
                 "prototype vs production. Preserve factual qualifiers and all bullet "
-                "details. Reject cross-project or cross-employer fact mixing. A shared "
+                "details. Reject cross-project or cross-employer fact mixing. "
+                + (
+                    "Reject a grouped rewrite that omits a material fact supplied in "
+                    "its target group. "
+                    if merge_similar
+                    else ""
+                )
+                + "A shared "
                 "vocabulary is NOT proof of support. Do not trust supplied citations "
                 "without reading them. Explain the verdict.",
                 {"entries": review_data},
@@ -587,7 +624,7 @@ def rewrite(
         )
     )
     if (
-        description is not None
+        rewrite_summary
         and summary_mechanical_rejection
         and summary_sources
         and os.environ.get("DISABLE_RETRIES") != "1"
@@ -623,7 +660,7 @@ def rewrite(
                 "The previous proposed summary was not fully supported or was missing. "
                 "Propose supported summary sentences (with IDs summary/0 through summary/5), "
                 "citing only the supplied candidate evidence. Do not over-condense or truncate "
-                "the summary. The job is context, not evidence. "
+                "the summary. The target context is not evidence. "
                 "Do not include digits, numerical claims, years of experience, "
                 "production use, ownership or uncited tools. "
                 "Preserve the original summary's voice, depth, and coverage. "
@@ -633,6 +670,7 @@ def rewrite(
                 "copying unsupported claims.",
                 {
                     "job_description": description,
+                    "target_context": target_context,
                     "original_summary": cv.summary,
                     "summary_evidence": data["summary_evidence"],
                     "previous_failures": [
@@ -794,7 +832,7 @@ def rewrite(
     summary = (
         " ".join(item.text for item in summaries) if accepted_summary else cv.summary
     )
-    if description is not None and not accepted_summary:
+    if rewrite_summary and not accepted_summary:
         report.warnings.append(
             "Kept the source summary: proposed summary was missing or not fully supported."
         )
@@ -830,5 +868,5 @@ def rewrite(
         for index, role in enumerate(cv.experience)
     ]
     if diagnostics is not None:
-        diagnostics.summary_fallback = description is not None and not accepted_summary
+        diagnostics.summary_fallback = rewrite_summary and not accepted_summary
     return cv.model_copy(update={"experience": experience, "summary": summary})

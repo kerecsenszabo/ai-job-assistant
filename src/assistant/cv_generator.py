@@ -532,7 +532,10 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(
         prog="job-assistant generate",
-        description="Generate a CV PDF from a PDF or JSON CV, optionally tailored to a job.",
+        description=(
+            "Generate a two-page generic ML CV from a PDF or JSON CV, "
+            "or tailor it to a job."
+        ),
     )
     parser.add_argument(
         "--cv",
@@ -541,7 +544,9 @@ def main(argv: list[str] | None = None) -> None:
         help="Source CV PDF or JSON file (defaults to JOB_ASSISTANT_CV_PATH)",
     )
     parser.add_argument(
-        "--job", type=Path, help="Job description TXT or PDF (omit for the full CV)"
+        "--job",
+        type=Path,
+        help="Job description TXT or PDF (omit for the two-page generic ML CV)",
     )
     parser.add_argument("--output", type=Path, required=True, help="Output PDF path")
     parser.add_argument(
@@ -561,13 +566,13 @@ def main(argv: list[str] | None = None) -> None:
         "--font-size",
         type=int,
         choices=(10, 11, 12),
-        default=12,
-        help="Base font size in points (default: 12)",
+        default=None,
+        help="Base font size in points (default: 11 generic, 12 targeted)",
     )
     parser.add_argument(
         "--margin-cm",
         type=margin_cm,
-        default=1.6,
+        default=None,
         metavar="CM",
         help="Page margins in cm, from 0.5 to 5 (default: 1.6)",
     )
@@ -622,6 +627,10 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--rubric requires --job")
     if args.output.suffix.lower() != ".pdf":
         parser.error("--output must be a PDF path")
+    generic_mode = args.job is None
+    explicit_page_override = args.font_size is not None or args.margin_cm is not None
+    page_font_size = args.font_size or (11 if generic_mode else 12)
+    page_margin_cm = args.margin_cm or 1.6
     outputs = [
         args.output,
         args.output.with_suffix(".tex"),
@@ -679,13 +688,19 @@ def main(argv: list[str] | None = None) -> None:
         import_performance.stage_model_seconds
     )
     export_started = time.perf_counter()
-    write_pdf(
-        to_latex(
+    page_settings = PageSettings(args.paper_size, page_font_size, page_margin_cm)
+    if generic_mode:
+        from assistant.generic_cv import fit_generic_cv_to_pages
+
+        cv, page_settings, _ = fit_generic_cv_to_pages(
             cv,
-            page_settings=PageSettings(args.paper_size, args.font_size, args.margin_cm),
-        ),
-        args.output,
-    )
+            report,
+            args.output,
+            page_settings,
+            allow_layout_fallback=not explicit_page_override,
+        )
+    else:
+        write_pdf(to_latex(cv, page_settings=page_settings), args.output)
     args.output.with_suffix(".json").write_text(
         cv.model_dump_json(indent=2), encoding="utf-8"
     )
@@ -723,6 +738,11 @@ def main(argv: list[str] | None = None) -> None:
                 file=sys.stderr,
             )
     print(f"Created {args.output}")
+    if generic_mode:
+        print(
+            f"Generic ML CV: {report.profile_name}, "
+            f"{report.final_page_count or 'unverified'} page(s)"
+        )
     print(f"Evidence and rewrite report: {report_path}")
     print(
         f"Performance: {report.performance.total_seconds:.1f}s, "

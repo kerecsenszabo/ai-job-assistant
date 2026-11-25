@@ -6,7 +6,8 @@ See the [README](../README.md) for setup, PDF generation, chat and benchmarks.
 
 For `job-assistant generate`, `--cv` accepts a text-based PDF or structured JSON.
 When omitted, it reads the path configured by `JOB_ASSISTANT_CV_PATH`.
-`--job` accepts a UTF-8 TXT file or text-based PDF; omit it to polish the full CV.
+`--job` accepts a UTF-8 TXT file or text-based PDF. Omit it to generate the
+default two-page generic machine learning engineer CV.
 `--output` must end in `.pdf` and must not overwrite any input file.
 Scanned PDFs require OCR before use. PDF import copies source text into the
 CV schema and rejects extracted strings absent from the document after whitespace
@@ -28,7 +29,8 @@ rejected.
 
 ## Tailoring and Factual Safeguards
 
-The job describes what to emphasize, never new candidate facts. The pipeline:
+A job description or the generic ML profile describes what to emphasize, never
+new candidate facts. The job pipeline:
 
 1. Extracts source-linked, atomic job criteria, separating required, preferred,
    responsibilities and eligibility constraints. Copied job descriptions retain
@@ -58,18 +60,28 @@ The job describes what to emphasize, never new candidate facts. The pipeline:
 
 The implementation separates shared models and request handling
 (`cv_tailoring_core.py`), job extraction (`job_parsing.py`), evidence matching
-(`cv_matching.py`), and audited rewriting (`cv_rewriting.py`). The
-`cv_tailoring.py` entry point retains the existing caller-facing imports and
-orchestrates these stages.
+(`cv_matching.py`), audited rewriting (`cv_rewriting.py`), and generic ML
+selection and page packing (`generic_cv.py`). The `cv_tailoring.py` entry point
+retains the existing caller-facing imports and orchestrates these stages.
 
-Without a job, all sections and bullets remain, experience wording is polished,
-and the summary is unchanged. Both modes preserve contact details, employers,
-roles, dates, education, languages, publications and certifications from the
-structured source.
+Without a job, the generator ranks the CV's own evidence against a broad ML
+vocabulary; it does not use a bundled job description or frozen requirement list.
+It preserves at least one bullet per role, selects up to 60 source
+bullets, and pairs closely related bullets within the same role and client
+context. The audited rewrite stage merges each pair into a concise sentence
+while preserving the facts from both sources, and rewrites the summary against
+the generic ML positioning. Content is then progressively reduced until the PDF
+fits two pages. Both modes preserve contact details, employers, roles, dates,
+education, languages, publications and certifications from the structured
+source.
 
 Tailoring selects up to 14 skills, 4 AI-native items and 6 bullets per matched
-role, with up to 2 original context bullets for unmatched roles. The default
-layout is compact 12pt A4 with 1.6 cm margins; page count depends on content.
+role, with up to 2 original context bullets for unmatched roles. The targeted
+layout defaults to 12pt A4 with 1.6 cm margins. The generic ML layout defaults
+to 11pt A4 with 1.6 cm margins, and may use 11pt or 10pt with tighter margins if
+reviewed content alone cannot fit the page limit. Explicit `--font-size` or
+`--margin-cm` values disable automatic layout fallbacks. Targeted page count
+depends on content.
 
 Missing CV evidence is not proof that you lack a skill. Automated review cannot
 guarantee factual accuracy. Inspect the final document before sending it.
@@ -81,7 +93,9 @@ Beside the requested PDF, the generator writes:
 - `*.json`: the exported structured CV.
 - `*.tex`: the rendered LaTeX.
 - `*.report.json`: requirements, source evidence, matches, rewrite verdicts,
-  warnings and timings.
+  warnings and timings. Generic reports also record the profile, requested and
+  final page count, selection scores, exported and omitted evidence, and any
+  content or layout fallbacks.
 - `*.source.json`: the original extracted facts, when the input was a PDF.
 
 The imported source JSON is saved before tailoring and PDF compilation, so it
@@ -107,7 +121,7 @@ Run `uv run job-assistant generate --help` for all options.
 | `--cv FILE` | Source PDF/JSON; defaults to `JOB_ASSISTANT_CV_PATH` |
 | `--model NAME` | Choose an installed Ollama model; default `granite4.2:3b` |
 | `--paper-size {a4,letter}` | PDF page size; default A4 |
-| `--font-size {10,11,12}` | Base LaTeX font size in points; default 12 |
+| `--font-size {10,11,12}` | Base LaTeX font size; default 11 generic, 12 targeted |
 | `--margin-cm CM` | Uniform page margins from 0.5 to 5 cm; default 1.6 |
 | `--rubric FILE` | Override weights, e.g. `{"required_weight": 4, "partial_credit": 0.25}` |
 | `--job-cache DIR` | Parsed-job cache; default `output/job-requirements/` |
